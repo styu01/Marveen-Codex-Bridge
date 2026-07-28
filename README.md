@@ -1,13 +1,28 @@
-# Béla Codex Bridge 0.2.1
+# Marveen Codex Bridge 0.2.1
 
 Különálló, frissítésálló szolgáltatás, amely egy ChatGPT-előfizetéssel
-bejelentkezett Codex CLI-t Béla alá rendelt agent-providerként tesz elérhetővé.
-Béla Node 24-en és Claude Code-dal változatlanul fut; a Bridge saját, rögzített
+bejelentkezett Codex CLI-t Marveen alá rendelt agent-providerként tesz elérhetővé.
+Marveen Node 24-en és Claude Code-dal változatlanul fut; a Bridge saját, rögzített
 Node 22.23.1 környezetet használ.
+
+## Elnevezés és 0.2.x kompatibilitás
+
+A projekt és az integrált rendszer neve **Marveen**. A „Béla” név egy konkrét
+telepítés felhasználó által választott agentneve volt, ezért nem része a
+projekt nyilvános márkanevének.
+
+A 0.2.x kiadásokban néhány technikai azonosító kompatibilitási okból még a
+korábbi `bela` előtagot viseli. Ilyen például a
+`bela-codex-bridge.service`, a `BELA_*` környezeti változók, a
+`bela_*` toolnevek, a `belaMessageId` mező és a `--restart-bela`
+kapcsoló. Ezeket ebben a kiadási ágban nem nevezzük át, mert az megtörné a
+már telepített service-eket, konfigurációkat, adatbázis-szerződéseket és
+callbackeket. A dokumentációban szereplő ilyen nevek szó szerinti
+kompatibilitási azonosítók, nem a termék neve.
 
 ## Mit tud ez a kiadás?
 
-- Codex-agent létrehozása a Béla agent-wizardból;
+- Codex-agent létrehozása a Marveen agent-wizardból;
 - provider- és `gpt-5.6-terra` modellválasztás;
 - agentenkénti `medium`, `high` vagy `xhigh` reasoning effort;
 - beépített Codex-képgenerálás `gpt-image-2` modellel, ugyanazon
@@ -29,18 +44,18 @@ Node 22.23.1 környezetet használ.
 - effortváltás tiltása aktív run vagy függő approval közben;
 - start, stop, restart és fresh-thread;
 - tartós Codex thread és restart utáni resume;
-- Béla agent→Codex üzenetküldés tmux használata nélkül;
+- Marveen agent→Codex üzenetküldés tmux használata nélkül;
 - idempotens run-létrehozás (`bela-message-<id>`);
 - pontosan egyszer feldolgozott completion callback;
-- provider callback csak Béla-üzenethez kötött runhoz, ezért a közvetlen API
+- provider callback csak Marveen-üzenethez kötött runhoz, ezért a közvetlen API
   runok nem hoznak létre hibás outbox retry-sort;
 - azonos runablakban a dynamic toollal már elküldött és a végválaszban
   megismételt agentüzenet pontos deduplikációja;
-- Codex válaszának visszaírása a küldő Béla-agent inboxába;
+- Codex válaszának visszaírása a küldő Marveen-agent inboxába;
 - SQLite WAL állapot, queue, események, outbox és approval;
 - globális 2 / agentenként 1 konkurens run;
 - interrupt API;
-- Codex approvalok megjelenítése a Béla felületén;
+- Codex approvalok megjelenítése a Marveen felületén;
 - approval request ID biztonságos újrafelhasználása, App Server generationnel
   naplózva, globális SQLite UNIQUE ütközés nélkül;
 - agentenként külön, HMAC-kötött MCP capability token;
@@ -56,10 +71,10 @@ Node 22.23.1 környezetet használ.
   MCP façade-nak, és csak workspace-relatív útvonalat fogad el;
 - az `item/tool/call` kérések fail-closed kötése az aktív runhoz, threadhez,
   turnhöz és agent HMAC-identitáshoz;
-- minden run előtt App Server MCP-inventory ellenőrzés; a négy kötelező Béla
+- minden run előtt App Server MCP-inventory ellenőrzés; a négy kötelező Marveen
   tool hiányában a run fail-closed módon leáll;
 - MCP startup státusz és hiba megjelenítése a Bridge journalban;
-- Béla scheduler → Codex queue útvonal;
+- Marveen scheduler → Codex queue útvonal;
 - Codex-agent kizárása a Claude/tmux auto-restart, context-guard és model-fallback
   útvonalakból;
 - privát Unix socket (`0600`) és külön systemd user service;
@@ -69,14 +84,14 @@ Node 22.23.1 környezetet használ.
 
 ```mermaid
 flowchart TD
-  B["Béla főagent / dashboard"] --> A["Marveen provider adapter"]
+  B["Marveen főagent / dashboard"] --> A["Marveen provider adapter"]
   A -->|"Unix socket + Bearer"| S["Codex Bridge service"]
   S -->|"egy felügyelt JSONL kapcsolat"| C["Codex App Server 0.145.0"]
   C --> T1["Codex thread A"]
   C --> T2["Codex thread B"]
   C -->|"gpt-image-2"| I["Workspace képartifact"]
   C -->|"dynamic tool request"| S
-  T1 -->|"MCP inventory + agent-scoped token"| F["Béla MCP facade"]
+  T1 -->|"MCP inventory + agent-scoped token"| F["Marveen MCP facade"]
   T2 -->|"másik scoped MCP token"| F
   S -->|"modell-tool dispatch ugyanazzal a scoped tokennel"| F
   S -->|"hitelesített outbox callback"| A
@@ -106,8 +121,8 @@ előtt külön dry-run is fut.
 
 Előfeltételek:
 
-- Béla: `~/marveen`;
-- Béla alapértelmezett Node: 24.16.0;
+- Marveen: `~/marveen`;
+- Marveen alapértelmezett Node: 24.16.0;
 - Bridge Node: `~/.nvm/versions/node/v22.23.1/bin/node`;
 - Codex: `~/.local/bin/codex`, 0.145.0;
 - `codex login status` → `Logged in using ChatGPT`;
@@ -120,7 +135,7 @@ cd ~/bela-codex-bridge-0.2.1
 ./scripts/install.sh --marveen-root "$HOME/marveen"
 ```
 
-Ha a Bridge és az adapter ellenőrzése után Béla is azonnal újraindítható:
+Ha a Bridge és az adapter ellenőrzése után Marveen is azonnal újraindítható:
 
 ```bash
 ./scripts/install.sh \
@@ -142,7 +157,7 @@ A telepítő:
 8. ellenőrzi a socketet, beareres authot, Codex modellt, App Server
    kompatibilitást és a `gpt-image-2` capability-t;
 9. timestampelt mentést készít, majd patcheli Marveent;
-10. a Béla által ténylegesen használt Node 24 alatt Marveen typechecket,
+10. a Marveen által ténylegesen használt Node 24 alatt Marveen typechecket,
     JavaScript syntax-checket és verzióspecifikus célteszteket futtat;
 11. kötelezően újraépíti a Marveen `dist` könyvtárát, majd ellenőrzi, hogy a
     futtatott JavaScriptben is jelen van a Codex provider, router és
@@ -164,13 +179,13 @@ inkrementális patch frissíti.
 
 ## Első Codex-agent
 
-1. Nyisd meg Béla Agents oldalát.
+1. Nyisd meg Marveen Agents oldalát.
 2. Válaszd az „Új ügynök” lehetőséget.
 3. Az „Agent motor” mezőben válaszd az „OpenAI Codex Bridge” opciót.
 4. Modell: `GPT-5.6 Terra`.
 5. Gondolkodási szint: `High`.
 6. Hozd létre, majd indítsd el az agentet.
-7. Küldj neki egy rövid feladatot egy másik Béla-agentből.
+7. Küldj neki egy rövid feladatot egy másik Marveen-agentből.
 8. A válasznak a küldő inboxába kell visszaérkeznie.
 
 ## Képgenerálás
@@ -179,7 +194,7 @@ A képgenerálás nem külön agent. Bármely Codex-agent használhatja, ha a
 `GET /v1/meta` válaszában
 `codex.providerCapabilities.imageGeneration === true`.
 
-Példafeladat Bélától:
+Példafeladat Marveentől:
 
 ```text
 $imagegen Készíts egy eredeti, 1600×900-as hero hátteret egy modern
@@ -211,7 +226,7 @@ Bridge-only leállítás:
 systemctl --user stop bela-codex-bridge.service
 ```
 
-Ez nem állítja le Bélát és a Claude-agenteket. A Codexnek címzett új üzenetek
+Ez nem állítja le Marveent és a Claude-agenteket. A Codexnek címzett új üzenetek
 pending állapotban maradnak, majd a Bridge visszatérésekor újrapróbálódnak.
 
 Eltávolítás:
@@ -247,7 +262,7 @@ lefuttatni, majd a lock fájl és a config verzióját együtt emelni.
 ## Korlátok ebben a kiadásban
 
 - Közvetlen Telegram/Slack channel-plugin nincs a Codex processen; a channel
-  Béla koordinátorán keresztül működik.
+  Marveen koordinátorán keresztül működik.
 - A Codex „terminál” helyett API-események vannak; teljes event-console UI még
   nincs.
 - A 0.2.1 helyi képgenerálást és előnézetet támogat. Tömeges API-batch,

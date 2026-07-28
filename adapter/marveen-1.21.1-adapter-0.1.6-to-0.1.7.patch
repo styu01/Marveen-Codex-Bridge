@@ -1,0 +1,129 @@
+diff -ruN '--exclude=node_modules' '--exclude=dist' marveen-1.21.1-current2/src/__tests__/codex-provider-callback-dedupe.test.ts marveen-1.21.1-0.1.7/src/__tests__/codex-provider-callback-dedupe.test.ts
+--- marveen-1.21.1-current2/src/__tests__/codex-provider-callback-dedupe.test.ts	1970-01-01 09:00:00.000000000 +0900
++++ marveen-1.21.1-0.1.7/src/__tests__/codex-provider-callback-dedupe.test.ts	2026-07-28 22:45:41.867314244 +0900
+@@ -0,0 +1,54 @@
++import { beforeEach, describe, expect, it, vi } from 'vitest'
++
++const dbGet = vi.hoisted(() => vi.fn())
++
++vi.mock('../db.js', () => ({
++  createAgentMessage: vi.fn(),
++  getAgentMessage: vi.fn(),
++  getDb: () => ({
++    prepare: vi.fn(() => ({ get: dbGet })),
++  }),
++  markMessageDone: vi.fn(),
++  markMessageFailed: vi.fn(),
++}))
++
++import {
++  CODEX_CALLBACK_ADAPTER_REVISION,
++  hasEquivalentAgentReply,
++} from '../web/routes/provider-callbacks.js'
++
++beforeEach(() => {
++  dbGet.mockReset()
++})
++
++describe('Codex provider callback reply deduplication', () => {
++  it('advertises callback adapter revision 2', () => {
++    expect(CODEX_CALLBACK_ADAPTER_REVISION).toBe(2)
++  })
++
++  it('finds only an exact reply from the same agent and target inside the run window', () => {
++    dbGet.mockReturnValueOnce({ id: 17 })
++    expect(hasEquivalentAgentReply(
++      'codex-dedupe',
++      'bela',
++      'EXACT_FINAL_REPLY',
++      100,
++    )).toBe(true)
++    expect(dbGet).toHaveBeenCalledWith(
++      'codex-dedupe',
++      'bela',
++      'EXACT_FINAL_REPLY',
++      100,
++    )
++  })
++
++  it('returns false when the scoped query finds no equivalent reply', () => {
++    dbGet.mockReturnValueOnce(undefined)
++    expect(hasEquivalentAgentReply(
++      'codex-dedupe',
++      'bela',
++      'EXACT_FINAL_REPLY',
++      101,
++    )).toBe(false)
++  })
++})
+diff -ruN '--exclude=node_modules' '--exclude=dist' marveen-1.21.1-current2/src/web/routes/provider-callbacks.ts marveen-1.21.1-0.1.7/src/web/routes/provider-callbacks.ts
+--- marveen-1.21.1-current2/src/web/routes/provider-callbacks.ts	2026-07-28 15:40:20.306548195 +0900
++++ marveen-1.21.1-0.1.7/src/web/routes/provider-callbacks.ts	2026-07-28 22:31:59.591332074 +0900
+@@ -34,12 +34,34 @@
+   runId?: unknown
+   agentId?: unknown
+   state?: unknown
++  startedAt?: unknown
+   finalResponse?: unknown
+   errorCode?: unknown
+   errorMessage?: unknown
+   context?: unknown
+ }
+ 
++export const CODEX_CALLBACK_ADAPTER_REVISION = 2
++
++export function hasEquivalentAgentReply(
++  fromAgent: string,
++  toAgent: string,
++  content: string,
++  notBefore: number,
++): boolean {
++  const row = getDb().prepare(`
++    SELECT id
++    FROM agent_messages
++    WHERE from_agent = ?
++      AND to_agent = ?
++      AND content = ?
++      AND created_at >= ?
++    ORDER BY id DESC
++    LIMIT 1
++  `).get(fromAgent, toAgent, content, notBefore)
++  return Boolean(row)
++}
++
+ export async function tryHandleProviderCallbacks(ctx: RouteContext): Promise<boolean> {
+   const { req, res, path, method } = ctx
+   if (path !== '/api/provider-callbacks/codex' || method !== 'POST') return false
+@@ -88,11 +110,30 @@
+     if (run.state === 'succeeded') {
+       const reply = typeof run.finalResponse === 'string' ? run.finalResponse.trim() : ''
+       const target = original.from_agent === 'system' ? MAIN_AGENT_ID : original.from_agent
+-      if (reply) {
++      const startedAt = typeof run.startedAt === 'string'
++        ? Math.floor(Date.parse(run.startedAt) / 1000)
++        : Number.NaN
++      const notBefore = Number.isSafeInteger(startedAt)
++        ? startedAt
++        : (original.delivered_at ?? original.created_at)
++      const duplicateReply = Boolean(reply) && hasEquivalentAgentReply(
++        run.agentId,
++        target,
++        reply,
++        notBefore,
++      )
++      if (reply && !duplicateReply) {
+         createAgentMessage(run.agentId, target, reply)
+       }
+       markMessageDone(messageId, `Codex run ${run.runId} completed`)
+-      return { status: 200, body: { ok: true, replyQueued: Boolean(reply) } }
++      return {
++        status: 200,
++        body: {
++          ok: true,
++          replyQueued: Boolean(reply) && !duplicateReply,
++          replyDuplicate: duplicateReply,
++        },
++      }
+     }
+ 
+     const reason = [

@@ -1,0 +1,30 @@
+[Unit]
+Description=Bela Codex Bridge
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=@INSTALL_ROOT@
+ExecStart=@NODE_BIN@ @INSTALL_ROOT@/dist/src/main.js
+Environment=BELA_CODEX_BRIDGE_CONFIG=@CONFIG_FILE@
+Environment=BELA_CODEX_BRIDGE_TOKEN_FILE=@TOKEN_FILE@
+Environment=HOME=@HOME_DIR@
+Environment=PATH=@CODEX_BIN_DIR@:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+KillMode=mixed
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=default.target

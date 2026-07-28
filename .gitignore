@@ -1,0 +1,7 @@
+node_modules/
+dist/
+var/
+*.sock
+*.log
+.env
+coverage/

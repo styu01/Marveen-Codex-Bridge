@@ -1,0 +1,1607 @@
+diff -ruN a/src/__tests__/auth-gate.test.ts b/src/__tests__/auth-gate.test.ts
+--- a/src/__tests__/auth-gate.test.ts	2026-07-27 17:43:07.885174171 +0100
++++ b/src/__tests__/auth-gate.test.ts	2026-07-27 17:43:07.893174171 +0100
+@@ -37,6 +37,8 @@
+     expect(requiresAuth('/api/auth/login', 'POST')).toBe(false)
+     expect(requiresAuth('/api/marveen/avatar', 'GET')).toBe(false)
+     expect(requiresAuth('/api/agents/zara/avatar', 'GET')).toBe(false)
++    expect(requiresAuth('/api/provider-callbacks/codex', 'POST')).toBe(false)
++    expect(requiresAuth('/api/codex-facade/messages', 'POST')).toBe(false)
+   })
+   it('gates every other /api/* path and the fleet manifest', () => {
+     expect(requiresAuth('/api/memories', 'GET')).toBe(true)
+diff -ruN a/src/providers/codex-bridge-client.ts b/src/providers/codex-bridge-client.ts
+--- a/src/providers/codex-bridge-client.ts	1970-01-01 01:00:00.000000000 +0100
++++ b/src/providers/codex-bridge-client.ts	2026-07-27 17:43:08.073174171 +0100
+@@ -0,0 +1,123 @@
++import { readFileSync } from 'node:fs'
++import http from 'node:http'
++import { homedir } from 'node:os'
++import { join } from 'node:path'
++
++const DEFAULT_SOCKET = process.env.BELA_CODEX_BRIDGE_SOCKET
++  || `/run/user/${process.getuid?.() ?? 1000}/bela-codex-bridge.sock`
++const DEFAULT_TOKEN_FILE = process.env.BELA_CODEX_BRIDGE_TOKEN_FILE
++  || join(homedir(), '.config', 'bela-codex-bridge', 'token')
++
++export class CodexBridgeHttpError extends Error {
++  constructor(
++    readonly status: number,
++    readonly code: string,
++    message: string,
++    readonly retryable: boolean,
++  ) {
++    super(message)
++    this.name = 'CodexBridgeHttpError'
++  }
++}
++
++interface BridgeEnvelope<T> {
++  data?: T
++  duplicate?: boolean
++  error?: { code?: string; message?: string }
++}
++
++export class CodexBridgeClient {
++  constructor(
++    private readonly socketPath = DEFAULT_SOCKET,
++    private readonly tokenFile = DEFAULT_TOKEN_FILE,
++    private readonly timeoutMs = 30_000,
++  ) {}
++
++  async request<T>(
++    method: string,
++    path: string,
++    body?: Record<string, unknown>,
++    extraHeaders: Record<string, string> = {},
++  ): Promise<{ data: T; duplicate: boolean }> {
++    let token: string
++    try {
++      token = readFileSync(this.tokenFile, 'utf8').trim()
++    } catch (error) {
++      throw new CodexBridgeHttpError(
++        503,
++        'bridge_token_unavailable',
++        `Codex Bridge token cannot be read: ${(error as Error).message}`,
++        true,
++      )
++    }
++    if (!token) {
++      throw new CodexBridgeHttpError(503, 'bridge_token_empty', 'Codex Bridge token file is empty', true)
++    }
++
++    const payload = body === undefined ? null : Buffer.from(JSON.stringify(body))
++    return new Promise((resolve, reject) => {
++      const req = http.request({
++        socketPath: this.socketPath,
++        path,
++        method,
++        headers: {
++          authorization: `Bearer ${token}`,
++          accept: 'application/json',
++          ...(payload
++            ? {
++                'content-type': 'application/json',
++                'content-length': String(payload.length),
++              }
++            : {}),
++          ...extraHeaders,
++        },
++      }, (res) => {
++        const chunks: Buffer[] = []
++        let bytes = 0
++        res.on('data', (chunk: Buffer) => {
++          bytes += chunk.length
++          if (bytes > 4 * 1024 * 1024) {
++            req.destroy(new Error('Codex Bridge response exceeds 4 MiB'))
++            return
++          }
++          chunks.push(chunk)
++        })
++        res.on('end', () => {
++          let parsed: BridgeEnvelope<T>
++          try {
++            parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as BridgeEnvelope<T>
++          } catch {
++            reject(new CodexBridgeHttpError(
++              res.statusCode ?? 502,
++              'invalid_bridge_response',
++              'Codex Bridge returned invalid JSON',
++              true,
++            ))
++            return
++          }
++          const status = res.statusCode ?? 502
++          if (status < 200 || status >= 300 || parsed.data === undefined) {
++            const code = parsed.error?.code || `http_${status}`
++            reject(new CodexBridgeHttpError(
++              status,
++              code,
++              parsed.error?.message || `Codex Bridge HTTP ${status}`,
++              status >= 500 || status === 408 || status === 409 || status === 429,
++            ))
++            return
++          }
++          resolve({ data: parsed.data, duplicate: parsed.duplicate === true })
++        })
++      })
++      req.setTimeout(this.timeoutMs, () => req.destroy(new Error('Codex Bridge request timed out')))
++      req.on('error', (error) => {
++        if (error instanceof CodexBridgeHttpError) reject(error)
++        else reject(new CodexBridgeHttpError(503, 'bridge_unreachable', error.message, true))
++      })
++      if (payload) req.end(payload)
++      else req.end()
++    })
++  }
++}
++
++export const codexBridgeClient = new CodexBridgeClient()
+diff -ruN a/src/providers/codex-provider.ts b/src/providers/codex-provider.ts
+--- a/src/providers/codex-provider.ts	1970-01-01 01:00:00.000000000 +0100
++++ b/src/providers/codex-provider.ts	2026-07-27 17:43:08.105174171 +0100
+@@ -0,0 +1,160 @@
++import { readFileSync } from 'node:fs'
++import { join } from 'node:path'
++import {
++  agentDir,
++  readAgentCodexProviderConfig,
++} from '../web/agent-config.js'
++import { codexBridgeClient } from './codex-bridge-client.js'
++import type { ProviderDispatch, ProviderRun, ProviderStatus } from './types.js'
++
++const statusCache = new Map<string, ProviderStatus>()
++
++function readOptional(path: string): string {
++  try { return readFileSync(path, 'utf8') } catch { return '' }
++}
++
++function instructionsFor(agentId: string): string {
++  const dir = agentDir(agentId)
++  const identity = readOptional(join(dir, 'CLAUDE.md'))
++  const soul = readOptional(join(dir, 'SOUL.md'))
++  return [
++    'This agent is managed by Béla through the Codex Bridge.',
++    identity && `Béla agent identity:\n${identity}`,
++    soul && `Béla agent soul/personality:\n${soul}`,
++  ].filter(Boolean).join('\n\n')
++}
++
++export async function syncCodexAgent(agentId: string): Promise<void> {
++  const config = readAgentCodexProviderConfig(agentId)
++  await codexBridgeClient.request(
++    'PUT',
++    `/v1/agents/${encodeURIComponent(agentId)}`,
++    {
++      displayName: agentId,
++      model: config.model,
++      workspacePath: agentDir(agentId),
++      workspaceMode: 'directory',
++      sandboxMode: config.sandboxMode,
++      approvalPolicy: config.approvalPolicy,
++      networkEnabled: config.networkEnabled,
++      instructions: instructionsFor(agentId),
++    },
++  )
++}
++
++export async function startCodexAgent(agentId: string): Promise<ProviderStatus> {
++  await syncCodexAgent(agentId)
++  const result = await codexBridgeClient.request<Record<string, unknown>>(
++    'POST',
++    `/v1/agents/${encodeURIComponent(agentId)}/start`,
++  )
++  const status: ProviderStatus = {
++    provider: 'codex',
++    reachable: true,
++    configured: true,
++    desiredState: String(result.data.desiredState ?? 'running'),
++    actualState: String(result.data.actualState ?? 'idle'),
++    model: String(result.data.model ?? readAgentCodexProviderConfig(agentId).model),
++  }
++  statusCache.set(agentId, status)
++  return status
++}
++
++export async function stopCodexAgent(agentId: string): Promise<ProviderStatus> {
++  const result = await codexBridgeClient.request<Record<string, unknown>>(
++    'POST',
++    `/v1/agents/${encodeURIComponent(agentId)}/stop`,
++  )
++  const status: ProviderStatus = {
++    provider: 'codex',
++    reachable: true,
++    configured: true,
++    desiredState: String(result.data.desiredState ?? 'stopped'),
++    actualState: String(result.data.actualState ?? 'offline'),
++    model: String(result.data.model ?? readAgentCodexProviderConfig(agentId).model),
++  }
++  statusCache.set(agentId, status)
++  return status
++}
++
++export async function restartCodexAgent(agentId: string, fresh = false): Promise<ProviderStatus> {
++  await syncCodexAgent(agentId)
++  if (fresh) {
++    await codexBridgeClient.request(
++      'POST',
++      `/v1/agents/${encodeURIComponent(agentId)}/fresh-thread`,
++    )
++  }
++  const result = await codexBridgeClient.request<Record<string, unknown>>(
++    'POST',
++    `/v1/agents/${encodeURIComponent(agentId)}/restart`,
++  )
++  const status: ProviderStatus = {
++    provider: 'codex',
++    reachable: true,
++    configured: true,
++    desiredState: String(result.data.desiredState ?? 'running'),
++    actualState: String(result.data.actualState ?? 'idle'),
++    model: String(result.data.model ?? readAgentCodexProviderConfig(agentId).model),
++  }
++  statusCache.set(agentId, status)
++  return status
++}
++
++export async function getCodexAgentStatus(agentId: string): Promise<ProviderStatus> {
++  try {
++    const result = await codexBridgeClient.request<{
++      desiredState?: string
++      actualState?: string
++      model?: string
++    }>('GET', `/v1/agents/${encodeURIComponent(agentId)}`)
++    const status: ProviderStatus = {
++      provider: 'codex',
++      reachable: true,
++      configured: true,
++      desiredState: result.data.desiredState,
++      actualState: result.data.actualState,
++      model: result.data.model,
++    }
++    statusCache.set(agentId, status)
++    return status
++  } catch (error) {
++    const err = error as Error & { status?: number }
++    const status: ProviderStatus = {
++      provider: 'codex',
++      reachable: err.status === 404,
++      configured: false,
++      error: err.message,
++    }
++    statusCache.set(agentId, status)
++    return status
++  }
++}
++
++export function getCachedCodexAgentStatus(agentId: string): ProviderStatus | null {
++  return statusCache.get(agentId) ?? null
++}
++
++export async function dispatchCodexRun(
++  agentId: string,
++  dispatch: ProviderDispatch,
++): Promise<ProviderRun> {
++  const result = await codexBridgeClient.request<{
++    runId: string
++    state: string
++  }>(
++    'POST',
++    `/v1/agents/${encodeURIComponent(agentId)}/runs`,
++    {
++      prompt: dispatch.prompt,
++      context: dispatch.context,
++      priority: 0,
++    },
++    { 'idempotency-key': `bela-message-${dispatch.messageId}` },
++  )
++  return {
++    runId: result.data.runId,
++    state: result.data.state,
++    duplicate: result.duplicate,
++  }
++}
+diff -ruN a/src/providers/types.ts b/src/providers/types.ts
+--- a/src/providers/types.ts	1970-01-01 01:00:00.000000000 +0100
++++ b/src/providers/types.ts	2026-07-27 17:43:08.041174171 +0100
+@@ -0,0 +1,30 @@
++export type AgentProvider = 'claude' | 'codex'
++
++export interface CodexProviderConfig {
++  model: string
++  sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access'
++  approvalPolicy: 'never' | 'bela'
++  networkEnabled: boolean
++}
++
++export interface ProviderDispatch {
++  messageId: number
++  prompt: string
++  context: Record<string, unknown>
++}
++
++export interface ProviderRun {
++  runId: string
++  state: string
++  duplicate: boolean
++}
++
++export interface ProviderStatus {
++  provider: AgentProvider
++  reachable: boolean
++  configured: boolean
++  desiredState?: string
++  actualState?: string
++  model?: string
++  error?: string
++}
+diff -ruN a/src/web/agent-config.ts b/src/web/agent-config.ts
+--- a/src/web/agent-config.ts	2026-07-27 17:43:07.373174171 +0100
++++ b/src/web/agent-config.ts	2026-07-27 17:43:07.381174171 +0100
+@@ -4,6 +4,7 @@
+ import { PROJECT_ROOT, MAIN_AGENT_ID, DEFAULT_AGENT_MODEL } from '../config.js'
+ import { atomicWriteFileSync } from './atomic-write.js'
+ import { safeJoin } from './sanitize.js'
++import type { AgentProvider, CodexProviderConfig } from '../providers/types.js'
+ 
+ export const AGENTS_BASE_DIR = join(PROJECT_ROOT, 'agents')
+ 
+@@ -79,6 +80,90 @@
+   atomicWriteFileSync(configPath, JSON.stringify(config, null, 2))
+ }
+ 
++// Provider selection is stored next to the existing per-agent model config so
++// a Béla update cannot split identity and runtime choice across two stores.
++// Missing/invalid values deliberately fall back to Claude for backwards
++// compatibility with every agent created before the Bridge existed.
++export function readAgentProvider(name: string): AgentProvider {
++  const configPath = join(agentDir(name), 'agent-config.json')
++  try {
++    const config = JSON.parse(readFileOr(configPath, '{}')) as Record<string, unknown>
++    return config.provider === 'codex' ? 'codex' : 'claude'
++  } catch {
++    return 'claude'
++  }
++}
++
++export function writeAgentProvider(name: string, provider: AgentProvider): void {
++  const configPath = join(agentDir(name), 'agent-config.json')
++  let config: Record<string, unknown> = {}
++  try { config = JSON.parse(readFileOr(configPath, '{}')) } catch {}
++  config.provider = provider
++  atomicWriteFileSync(configPath, JSON.stringify(config, null, 2))
++}
++
++const CODEX_SANDBOXES = new Set<CodexProviderConfig['sandboxMode']>([
++  'read-only',
++  'workspace-write',
++  'danger-full-access',
++])
++const CODEX_APPROVALS = new Set<CodexProviderConfig['approvalPolicy']>(['never', 'bela'])
++
++export function readAgentCodexProviderConfig(name: string): CodexProviderConfig {
++  const configPath = join(agentDir(name), 'agent-config.json')
++  try {
++    const config = JSON.parse(readFileOr(configPath, '{}')) as Record<string, unknown>
++    const raw = config.providerConfig && typeof config.providerConfig === 'object'
++      ? config.providerConfig as Record<string, unknown>
++      : {}
++    const sandbox = typeof raw.sandboxMode === 'string'
++      && CODEX_SANDBOXES.has(raw.sandboxMode as CodexProviderConfig['sandboxMode'])
++      ? raw.sandboxMode as CodexProviderConfig['sandboxMode']
++      : 'workspace-write'
++    const approval = typeof raw.approvalPolicy === 'string'
++      && CODEX_APPROVALS.has(raw.approvalPolicy as CodexProviderConfig['approvalPolicy'])
++      ? raw.approvalPolicy as CodexProviderConfig['approvalPolicy']
++      : 'bela'
++    return {
++      model: typeof raw.model === 'string' && raw.model.trim()
++        ? raw.model.trim()
++        : 'gpt-5.6-terra',
++      sandboxMode: sandbox,
++      approvalPolicy: approval,
++      networkEnabled: raw.networkEnabled === true,
++    }
++  } catch {
++    return {
++      model: 'gpt-5.6-terra',
++      sandboxMode: 'workspace-write',
++      approvalPolicy: 'bela',
++      networkEnabled: false,
++    }
++  }
++}
++
++export function writeAgentCodexProviderConfig(
++  name: string,
++  value: Partial<CodexProviderConfig>,
++): void {
++  const configPath = join(agentDir(name), 'agent-config.json')
++  let config: Record<string, unknown> = {}
++  try { config = JSON.parse(readFileOr(configPath, '{}')) } catch {}
++  const current = readAgentCodexProviderConfig(name)
++  const next: CodexProviderConfig = {
++    model: typeof value.model === 'string' && value.model.trim() ? value.model.trim() : current.model,
++    sandboxMode: value.sandboxMode && CODEX_SANDBOXES.has(value.sandboxMode)
++      ? value.sandboxMode
++      : current.sandboxMode,
++    approvalPolicy: value.approvalPolicy && CODEX_APPROVALS.has(value.approvalPolicy)
++      ? value.approvalPolicy
++      : current.approvalPolicy,
++    networkEnabled: value.networkEnabled ?? current.networkEnabled,
++  }
++  config.providerConfig = next
++  atomicWriteFileSync(configPath, JSON.stringify(config, null, 2))
++}
++
+ export function readAgentDisplayName(name: string): string {
+   const configPath = join(agentDir(name), 'agent-config.json')
+   try {
+diff -ruN a/src/web/agent-process.ts b/src/web/agent-process.ts
+--- a/src/web/agent-process.ts	2026-07-27 17:43:07.469174171 +0100
++++ b/src/web/agent-process.ts	2026-07-27 17:43:07.477174171 +0100
+@@ -19,7 +19,7 @@
+   detectsModelConsentDialog,
+   type FirstRunGateKind,
+ } from '../pane-state.js'
+-import { agentDir, listAgentNames, readAgentModel, readAgentClaudeConfigDir, readAgentClaudePlan, readAgentChannelProvider, readAgentAuthMode, readAgentDisplayName, readAgentRemoteConfig, readAgentRemoteHost, readAgentMemoryIsolation } from './agent-config.js'
++import { agentDir, listAgentNames, readAgentModel, readAgentProvider, readAgentClaudeConfigDir, readAgentClaudePlan, readAgentChannelProvider, readAgentAuthMode, readAgentDisplayName, readAgentRemoteConfig, readAgentRemoteHost, readAgentMemoryIsolation } from './agent-config.js'
+ import { resolveAgentConfigDir } from './claude-plans.js'
+ import { provisionMemoryBoundaryDir } from './memory-boundary.js'
+ import { renameSharedCredentialsIfSafe } from './claude-credentials-guard.js'
+@@ -814,6 +814,9 @@
+ export function startAgentProcess(name: string, opts: { fresh?: boolean } = {}): { ok: boolean; pid?: number; error?: string } {
+   const dir = agentDir(name)
+   if (!existsSync(dir)) return { ok: false, error: 'Agent not found' }
++  if (readAgentProvider(name) === 'codex') {
++    return { ok: false, error: 'Codex agents must be started through the Codex Bridge provider' }
++  }
+ 
+   // Remote agents are handled entirely by the ssh path above (with its own
+   // start guard), before any local already-running check / scaffolding.
+@@ -1978,4 +1981,3 @@
+   logger.warn({ session, parked: parked.slice(0, 60) }, 'message-router: cleared stale parked input (channel un-wedge)')
+   return true
+ }
+-
+diff -ruN a/src/web/auth-gate.ts b/src/web/auth-gate.ts
+--- a/src/web/auth-gate.ts	2026-07-27 17:43:07.325174171 +0100
++++ b/src/web/auth-gate.ts	2026-07-27 17:43:07.333174171 +0100
+@@ -68,6 +68,11 @@
+ export function requiresAuth(path: string, method: string): boolean {
+   if (path === '/api/auth/status' && method === 'GET') return false
+   if (path === '/api/auth/login' && method === 'POST') return false
++  // This endpoint has its own narrowly scoped Bridge bearer token. It must
++  // pass the dashboard gate so the route can authenticate that token itself.
++  if (path === '/api/provider-callbacks/codex' && method === 'POST') return false
++  // Per-agent HMAC capability tokens are validated inside this narrow facade.
++  if (path.startsWith('/api/codex-facade/')) return false
+   if (method === 'GET' && (path === '/api/marveen/avatar' || /^\/api\/agents\/[^/]+\/avatar$/.test(path))) return false
+   if (path === '/.well-known/fleetq' && method === 'GET') return true
+   return path.startsWith('/api/')
+diff -ruN a/src/web/auto-restart-runner.ts b/src/web/auto-restart-runner.ts
+--- a/src/web/auto-restart-runner.ts	2026-07-27 17:43:07.677174171 +0100
++++ b/src/web/auto-restart-runner.ts	2026-07-27 17:43:07.685174171 +0100
+@@ -2,7 +2,7 @@
+ import { existsSync } from 'node:fs'
+ import { logger } from '../logger.js'
+ import { MAIN_AGENT_ID, SERVICE_ID } from '../config.js'
+-import { listAgentNames, readAgentRemoteHost } from './agent-config.js'
++import { listAgentNames, readAgentProvider, readAgentRemoteHost } from './agent-config.js'
+ import {
+   agentRunState,
+   agentSessionName,
+@@ -104,6 +104,7 @@
+ }
+ 
+ function checkAgent(name: string, nowMs: number): void {
++  if (name !== MAIN_AGENT_ID && readAgentProvider(name) === 'codex') return
+   const cfg = readAutoRestartConfig(name)
+   if (!cfg.enabled) {
+     lastRestart.delete(name) // re-seed cleanly if re-enabled later
+diff -ruN a/src/web/channel-monitor.ts b/src/web/channel-monitor.ts
+--- a/src/web/channel-monitor.ts	2026-07-27 17:43:07.629174171 +0100
++++ b/src/web/channel-monitor.ts	2026-07-27 17:43:07.641174171 +0100
+@@ -5,7 +5,7 @@
+ import { resolveFromPath } from '../platform.js'
+ import { logger } from '../logger.js'
+ import { MAIN_AGENT_ID, SERVICE_ID, BOT_NAME, CHANNEL_PROVIDER, PROJECT_ROOT, RESPAWN_ENABLED } from '../config.js'
+-import { agentDir, listAgentNames, readAgentChannelProvider } from './agent-config.js'
++import { agentDir, listAgentNames, readAgentChannelProvider, readAgentProvider } from './agent-config.js'
+ import {
+   agentHasChannel,
+   agentSessionName,
+@@ -1777,7 +1777,9 @@
+   if (reconcileBurstInProgress) return
+   const desired = getDesiredAgents()
+   if (desired.size === 0) return
+-  const down = [...desired].filter((name) => !isAgentRunning(name))
++  // Codex agents are reconciled by the standalone Bridge. Starting them here
++  // would accidentally launch Claude/tmux with a Codex model id.
++  const down = [...desired].filter((name) => readAgentProvider(name) === 'claude' && !isAgentRunning(name))
+   if (down.length === 0) return
+   reconcileBurstInProgress = true
+   try {
+diff -ruN a/src/web/context-guard-runner.ts b/src/web/context-guard-runner.ts
+--- a/src/web/context-guard-runner.ts	2026-07-27 17:43:07.721174171 +0100
++++ b/src/web/context-guard-runner.ts	2026-07-27 17:43:07.733174171 +0100
+@@ -4,7 +4,7 @@
+ import { MAIN_AGENT_ID, PROJECT_ROOT } from '../config.js'
+ import { hardRestartMarveenChannels, lastMainRespawnAt, MARVEEN_POST_RESPAWN_GRACE_MS } from './channel-monitor.js'
+ import { shouldDeferForRecentRespawn } from './stuck-tool-call-watcher.js'
+-import { listAgentNames, agentDir, readAgentModel, readAgentClaudeConfigDir, readAgentRemoteHost } from './agent-config.js'
++import { listAgentNames, agentDir, readAgentModel, readAgentClaudeConfigDir, readAgentProvider, readAgentRemoteHost } from './agent-config.js'
+ import {
+   agentRunState,
+   agentSessionName,
+@@ -166,6 +166,7 @@
+ }
+ 
+ async function checkAgent(name: string, nowMs: number): Promise<void> {
++  if (name !== MAIN_AGENT_ID && readAgentProvider(name) === 'codex') return
+   const cfg = readContextGuardConfig(name)
+   const state = guardStates.get(name) ?? INITIAL_GUARD_STATE
+ 
+diff -ruN a/src/web/message-router.ts b/src/web/message-router.ts
+--- a/src/web/message-router.ts	2026-07-27 17:43:07.417174171 +0100
++++ b/src/web/message-router.ts	2026-07-27 17:43:07.429174171 +0100
+@@ -17,7 +17,9 @@
+ import { isQualifiedId } from './federation/address.js'
+ import { sendFederatedMessage } from './federation/bridge.js'
+ import { getFederationConfig, abandonWindowMsForPeer } from './federation/config.js'
+-import { readAgentRemoteHost, readAgentVoiceConfig } from './agent-config.js'
++import { readAgentProvider, readAgentRemoteHost, readAgentVoiceConfig } from './agent-config.js'
++import { dispatchCodexRun } from '../providers/codex-provider.js'
++import { CodexBridgeHttpError } from '../providers/codex-bridge-client.js'
+ import {
+   agentSessionName,
+   isSessionReadyForPrompt,
+@@ -195,6 +197,97 @@
+ // inside the serialized tick, so the cap bounds how long federation can hold
+ // the tick (~15s worst case). Backoff-skipped messages don't count.
+ const MAX_FEDERATED_PER_TICK = 3
++const MAX_CODEX_PER_TICK = 10
++
++// Codex agents are durable Bridge queues, not tmux panes. Accepting the run
++// marks the Béla message delivered; the authenticated Bridge callback later
++// marks it done/failed and enqueues the final answer back to the sender.
++async function deliverCodexBatch(messages: AgentMessage[], now: number): Promise<void> {
++  for (const msg of messages.slice(0, MAX_CODEX_PER_TICK)) {
++    const ageMs = now - msg.created_at * 1000
++    try {
++      const cls = classifyAgentMessage(msg.from_agent, msg.to_agent)
++      if (!cls) {
++        markMessageFailed(msg.id, 'Invalid or empty from_agent')
++        continue
++      }
++      const { category, safeFrom } = cls
++      const isChannelInbound = category === 'channel-inbound'
++      let deliveryContent = msg.content
++      if (isChannelInbound) {
++        const voiceFileId = extractVoiceFileId(msg.content)
++        const chatId = extractChatId(msg.content)
++        if (voiceFileId && chatId) {
++          setLastInboundModality(msg.to_agent, chatId, 'voice')
++          const voiceCfg = readAgentVoiceConfig(msg.to_agent)
++          if (voiceCfg.responseMode !== 'text') {
++            const transcript = await callVoiceSTT(voiceFileId, msg.to_agent)
++            if (transcript) deliveryContent = injectTranscript(msg.content, transcript)
++          }
++        } else if (chatId) {
++          setLastInboundModality(msg.to_agent, chatId, 'text')
++        }
++      }
++
++      const traceCtx = isChannelInbound
++        ? null
++        : msg.trace_id && msg.span_id
++          ? { trace_id: msg.trace_id, span_id: msg.span_id }
++          : stampTraceOnMessage(msg, now)
++      const { prefix, wrapped } = wrapAgentMessageForDelivery(
++        category,
++        safeFrom,
++        msg.from_agent,
++        isChannelInbound ? deliveryContent : msg.content,
++        msg.id,
++        msg.origin_note,
++      )
++      const run = await dispatchCodexRun(msg.to_agent, {
++        messageId: msg.id,
++        prompt: prefix + wrapped,
++        context: {
++          belaMessageId: msg.id,
++          fromAgent: msg.from_agent,
++          toAgent: msg.to_agent,
++          originNote: msg.origin_note,
++          traceId: traceCtx?.trace_id ?? null,
++          spanId: traceCtx?.span_id ?? null,
++        },
++      })
++      if (markMessageDelivered(msg.id)) {
++        setMessageResult(msg.id, `codex:${run.runId}`)
++        if (traceCtx) deliveredTraceCtx.set(msg.to_agent, traceCtx)
++      }
++      routerLoggedMisses.delete(msg.id)
++      logger.info({
++        id: msg.id,
++        from: msg.from_agent,
++        to: msg.to_agent,
++        runId: run.runId,
++        duplicate: run.duplicate,
++      }, 'Agent message accepted by Codex Bridge')
++    } catch (error) {
++      const bridgeError = error instanceof CodexBridgeHttpError ? error : null
++      const terminal = bridgeError ? !bridgeError.retryable : false
++      if (terminal || ageMs > MESSAGE_ABANDON_WINDOW_MS) {
++        const reason = bridgeError
++          ? `${bridgeError.code}: ${bridgeError.message}`
++          : `Codex Bridge unavailable: ${(error as Error).message}`
++        markMessageFailed(msg.id, reason.slice(0, 2000))
++        notifyOrchestratorOfFailedHandoff(msg, reason)
++        routerLoggedMisses.delete(msg.id)
++      } else if (!routerLoggedMisses.has(msg.id)) {
++        logger.warn({
++          id: msg.id,
++          to: msg.to_agent,
++          code: bridgeError?.code,
++          err: error,
++        }, 'Codex Bridge delivery unavailable, will retry')
++        routerLoggedMisses.add(msg.id)
++      }
++    }
++  }
++}
+ 
+ // Deliver pending FEDERATED messages over the HTTPS bridge. Kept separate
+ // from the local queue on purpose: qualified rows never consume the local
+@@ -373,7 +466,12 @@
+     const allPending = getPendingMessages()
+     const localPending: AgentMessage[] = []
+     const federatedPending: AgentMessage[] = []
+-    for (const m of allPending) (isQualifiedId(m.to_agent) ? federatedPending : localPending).push(m)
++    const codexPending: AgentMessage[] = []
++    for (const m of allPending) {
++      if (isQualifiedId(m.to_agent)) federatedPending.push(m)
++      else if (m.to_agent !== MAIN_AGENT_ID && readAgentProvider(m.to_agent) === 'codex') codexPending.push(m)
++      else localPending.push(m)
++    }
+     const pending = localPending.slice(0, MAX_MESSAGES_PER_TICK)
+     const now = Date.now()
+     // ---- update absent/present tracking for all receivers in this tick ----
+@@ -429,6 +527,7 @@
+     // Federated (slash-qualified) recipients delivered over the HTTPS bridge,
+     // on their own budget so neither queue starves the other.
+     await deliverFederatedBatch(federatedPending, now)
++    await deliverCodexBatch(codexPending, now)
+ 
+     let mainAgentWakeupFiredThisTick = false
+     for (const msg of pending) {
+@@ -709,4 +808,3 @@
+     return null
+   }
+ }
+-
+diff -ruN a/src/web/model-fallback-runner.ts b/src/web/model-fallback-runner.ts
+--- a/src/web/model-fallback-runner.ts	2026-07-27 17:43:07.789174171 +0100
++++ b/src/web/model-fallback-runner.ts	2026-07-27 17:43:07.801174171 +0100
+@@ -8,6 +8,7 @@
+   listAgentNames,
+   readAgentRemoteHost,
+   readAgentModel,
++  readAgentProvider,
+   writeAgentModel,
+   resolveModelId,
+   DEFAULT_MODEL,
+@@ -94,6 +95,7 @@
+ }
+ 
+ function checkAgent(name: string, nowMs: number, revertAfterMs: number, chain: string[]): void {
++  if (name !== MAIN_AGENT_ID && readAgentProvider(name) === 'codex') return
+   // Sub-agents must be up; the main session is launchd-managed (always present).
+   if (name !== MAIN_AGENT_ID && agentRunState(name) !== 'running') return
+ 
+diff -ruN a/src/web/routes/agents.ts b/src/web/routes/agents.ts
+--- a/src/web/routes/agents.ts	2026-07-27 17:43:07.525174171 +0100
++++ b/src/web/routes/agents.ts	2026-07-27 17:43:07.533174171 +0100
+@@ -21,6 +21,10 @@
+   resolveModelId,
+   readAgentModel,
+   writeAgentModel,
++  readAgentProvider,
++  writeAgentProvider,
++  readAgentCodexProviderConfig,
++  writeAgentCodexProviderConfig,
+   readAgentDisplayName,
+   writeAgentDisplayName,
+   readAgentSecurityProfile,
+@@ -44,6 +48,15 @@
+   KNOWN_VOICE_MODELS,
+   type AuthMode,
+ } from '../agent-config.js'
++import type { AgentProvider, CodexProviderConfig } from '../../providers/types.js'
++import { codexBridgeClient } from '../../providers/codex-bridge-client.js'
++import {
++  getCachedCodexAgentStatus,
++  getCodexAgentStatus,
++  restartCodexAgent,
++  startCodexAgent,
++  stopCodexAgent,
++} from '../../providers/codex-provider.js'
+ import { readClaudePlans, resolveAgentConfigDir } from '../claude-plans.js'
+ import {
+   readAgentTeam,
+@@ -315,6 +328,8 @@
+   displayName: string
+   description: string
+   model: string
++  provider: AgentProvider
++  providerConfig: CodexProviderConfig | null
+   activeModel: string | null
+   runningSince: number | null
+   authMode: AuthMode
+@@ -373,22 +388,34 @@
+   // never blocks on a sleeping laptop's ssh timeout. `running` is derived from
+   // it; `unreachable` reads as not-running but is surfaced distinctly so the UI
+   // does not show a still-alive remote agent as "stopped".
++  const provider = readAgentProvider(name)
+   const remote = readAgentRemoteConfig(name)
+-  const runState = agentRunStateCached(name, remote.host != null)
++  const codexStatus = provider === 'codex' ? getCachedCodexAgentStatus(name) : null
++  const runState = provider === 'codex'
++    ? codexStatus?.actualState === 'idle' || codexStatus?.actualState === 'busy' || codexStatus?.actualState === 'waiting_approval'
++      ? 'running'
++      : 'stopped'
++    : agentRunStateCached(name, remote.host != null)
+   const running = runState === 'running'
+-  const session = running ? agentSessionName(name) : undefined
+-  const runningSince = running ? getAgentRunningSince(name) : null
++  const session = provider === 'claude' && running ? agentSessionName(name) : undefined
++  const runningSince = provider === 'claude' && running ? getAgentRunningSince(name) : null
+ 
+   // Reauth badge: only meaningful for a running session (a stopped agent has
+   // no pane to inspect). One capture-pane per running agent on the list poll.
+-  const reauth = running ? detectReauthNeeded(capturePane(agentSessionName(name))) : { needsReauth: false }
++  const reauth = provider === 'claude' && running
++    ? detectReauthNeeded(capturePane(agentSessionName(name)))
++    : { needsReauth: false }
+ 
+   return {
+     name,
+     displayName: readAgentDisplayName(name),
+     description: extractDescriptionFromClaudeMd(claudeMd),
+-    model: readAgentModel(name),
+-    activeModel: running ? readActiveModelFromProjectDir(dir, runningSince ?? undefined, resolveAgentConfigDir(name).configDir ?? undefined) : null,
++    model: provider === 'codex' ? readAgentCodexProviderConfig(name).model : readAgentModel(name),
++    provider,
++    providerConfig: provider === 'codex' ? readAgentCodexProviderConfig(name) : null,
++    activeModel: provider === 'codex'
++      ? codexStatus?.model ?? readAgentCodexProviderConfig(name).model
++      : running ? readActiveModelFromProjectDir(dir, runningSince ?? undefined, resolveAgentConfigDir(name).configDir ?? undefined) : null,
+     runningSince,
+     authMode: readAgentAuthMode(name),
+     securityProfile: readAgentSecurityProfile(name),
+@@ -407,7 +434,9 @@
+     session,
+     hasAvatar: findAvatarForAgent(name) !== null,
+     autoRestart: readAutoRestartConfig(name),
+-    contextTokens: running ? readContextTokensFromProjectDir(dir, resolveAgentConfigDir(name).configDir ?? undefined) : null,
++    contextTokens: provider === 'claude' && running
++      ? readContextTokensFromProjectDir(dir, resolveAgentConfigDir(name).configDir ?? undefined)
++      : null,
+     needsReauth: reauth.needsReauth,
+     reauthReason: reauth.reason,
+   }
+@@ -477,6 +506,13 @@
+     const hasOpenRouter = getSecret('openrouter-fleet-key') !== null
+     const orCatalog = loadOpenRouterCatalog()
+     json(res, {
++      providers: [
++        { id: 'claude', label: 'Claude Code' },
++        { id: 'codex', label: 'OpenAI Codex Bridge' },
++      ],
++      codex: [
++        { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra (ChatGPT előfizetés)' },
++      ],
+       claude: [
+         { id: 'claude-opus-5', label: 'Opus 5 (legújabb Opus)' },
+         { id: 'claude-sonnet-5', label: 'Sonnet 5' },
+@@ -722,10 +758,27 @@
+   if (path === '/api/agents' && method === 'POST') {
+     const body = await readBody(req)
+     const data = JSON.parse(body.toString())
+-    const { description, model: rawModel, profile: rawProfile } = data as { name: string; description: string; model?: string; profile?: string }
++    const {
++      description,
++      model: rawModel,
++      profile: rawProfile,
++      provider: rawProvider,
++      providerConfig: rawProviderConfig,
++    } = data as {
++      name: string
++      description: string
++      model?: string
++      profile?: string
++      provider?: AgentProvider
++      providerConfig?: Partial<CodexProviderConfig>
++    }
+     const rawName = typeof data.name === 'string' ? data.name.trim() : ''
+     const name = sanitizeAgentName(rawName)
+-    const model = resolveModelId(rawModel || DEFAULT_MODEL)
++    const provider: AgentProvider = rawProvider === 'codex' ? 'codex' : 'claude'
++    const model = provider === 'codex'
++      ? rawModel?.trim() || rawProviderConfig?.model?.trim() || 'gpt-5.6-terra'
++      : resolveModelId(rawModel || DEFAULT_MODEL)
++    const generationModel = provider === 'codex' ? DEFAULT_MODEL : model
+     const profileId = (rawProfile || 'default').trim() || 'default'
+ 
+     if (!name) { json(res, { error: 'Name is required' }, 400); return true }
+@@ -734,6 +787,13 @@
+ 
+     scaffoldAgentDir(name)
+     writeAgentModel(name, model)
++    writeAgentProvider(name, provider)
++    if (provider === 'codex') {
++      writeAgentCodexProviderConfig(name, {
++        ...rawProviderConfig,
++        model,
++      })
++    }
+     writeAgentSecurityProfile(name, profileId)
+     writeAgentSettingsFromProfile(name, loadProfileTemplate(profileId))
+     if (rawName && rawName !== name) writeAgentDisplayName(name, rawName)
+@@ -741,7 +801,7 @@
+     logger.info({ name, description }, 'Generating agent CLAUDE.md and SOUL.md...')
+     try {
+       const [claudeMd, soulMd] = await Promise.all([
+-        generateClaudeMd(name, description, model),
++        generateClaudeMd(name, description, generationModel),
+         generateSoulMd(name, description),
+       ])
+       atomicWriteFileSync(join(agentDir(name), 'CLAUDE.md'), claudeMd)
+@@ -1588,6 +1648,17 @@
+     // the --channels plugin MCP server (agent comes up deaf).
+     let startFresh = false
+     try { startFresh = JSON.parse((await readBody(req)).toString() || '{}').fresh === true } catch {}
++    if (readAgentProvider(name) === 'codex') {
++      try {
++        const status = await startCodexAgent(name)
++        addDesiredAgent(name)
++        json(res, { ok: true, provider: 'codex', status })
++      } catch (err) {
++        logger.error({ err, name }, 'Codex agent start failed')
++        json(res, { error: err instanceof Error ? err.message : 'Codex Bridge start failed' }, 502)
++      }
++      return true
++    }
+     const result = startAgentProcess(name, { fresh: startFresh })
+     // Record operator intent so the monitor keeps this agent up across shared
+     // tmux-server restarts / reboots (see agent-desired-state.ts).
+@@ -1604,6 +1675,17 @@
+       json(res, { error: 'Main agent lifecycle is service-managed; use /api/marveen/restart for recovery' }, 400)
+       return true
+     }
++    if (readAgentProvider(name) === 'codex') {
++      try {
++        const status = await stopCodexAgent(name)
++        removeDesiredAgent(name)
++        json(res, { ok: true, provider: 'codex', status })
++      } catch (err) {
++        logger.error({ err, name }, 'Codex agent stop failed')
++        json(res, { error: err instanceof Error ? err.message : 'Codex Bridge stop failed' }, 502)
++      }
++      return true
++    }
+     const result = stopAgentProcess(name)
+     // Explicit stop clears intent so the monitor will not resurrect it.
+     removeDesiredAgent(name)
+@@ -1667,6 +1749,17 @@
+     // Optional { "fresh": true } body -> no `--continue` (see /start note).
+     let restartFresh = false
+     try { restartFresh = JSON.parse((await readBody(req)).toString() || '{}').fresh === true } catch {}
++    if (readAgentProvider(name) === 'codex') {
++      try {
++        const status = await restartCodexAgent(name, restartFresh)
++        addDesiredAgent(name)
++        json(res, { ok: true, provider: 'codex', status })
++      } catch (err) {
++        logger.error({ err, name }, 'Codex agent restart failed')
++        json(res, { error: err instanceof Error ? err.message : 'Codex Bridge restart failed' }, 502)
++      }
++      return true
++    }
+     const result = restartAgentProcess(name, { fresh: restartFresh })
+     if (result.ok) { json(res, { ok: true }); return true }
+     json(res, { error: result.error }, 400)
+@@ -1677,6 +1770,10 @@
+   if (statusMatch && method === 'GET') {
+     const name = decodeURIComponent(statusMatch[1])
+     if (!existsSync(agentDir(name))) { json(res, { error: 'Agent not found' }, 404); return true }
++    if (readAgentProvider(name) === 'codex') {
++      json(res, await getCodexAgentStatus(name))
++      return true
++    }
+     json(res, getAgentProcessInfo(name))
+     return true
+   }
+@@ -1840,6 +1937,27 @@
+     const data = JSON.parse(body.toString()) as {
+       claudeMd?: string; soulMd?: string; mcpJson?: string; model?: string
+       authMode?: AuthMode; apiKey?: string; claudePlan?: string; memoryIsolation?: boolean
++      provider?: AgentProvider; providerConfig?: Partial<CodexProviderConfig>
++    }
++    const previousProvider = readAgentProvider(name)
++    if (data.provider !== undefined && data.provider !== previousProvider) {
++      // Stop the old provider BEFORE persisting the switch. Otherwise a
++      // Claude tmux session and a Codex thread can both remain live under the
++      // same Béla agent id.
++      if (previousProvider === 'codex') {
++        try {
++          await stopCodexAgent(name)
++        } catch (err) {
++          logger.warn({ err, name }, 'Old Codex provider could not be stopped during provider switch')
++        }
++      } else {
++        const stopped = stopAgentProcess(name)
++        if (!stopped.ok && !/not running|not found/i.test(stopped.error ?? '')) {
++          json(res, { error: stopped.error || 'Old Claude provider could not be stopped' }, 409)
++          return true
++        }
++      }
++      removeDesiredAgent(name)
+     }
+     if (data.memoryIsolation !== undefined) {
+       // The main agent's cwd IS the install repo root, which is already a git
+@@ -1862,6 +1980,21 @@
+     if (data.soulMd !== undefined) atomicWriteFileSync(join(agentDir(name), 'SOUL.md'), data.soulMd)
+     if (data.mcpJson !== undefined) atomicWriteFileSync(join(agentDir(name), '.mcp.json'), data.mcpJson)
+     if (data.model !== undefined) writeAgentModel(name, data.model)
++    if (data.provider !== undefined) {
++      if (data.provider !== 'claude' && data.provider !== 'codex') {
++        json(res, { error: 'provider must be claude or codex' }, 400)
++        return true
++      }
++      writeAgentProvider(name, data.provider)
++    }
++    if (data.providerConfig !== undefined) {
++      writeAgentCodexProviderConfig(name, {
++        ...data.providerConfig,
++        model: data.model ?? data.providerConfig.model,
++      })
++    } else if (data.model !== undefined && readAgentProvider(name) === 'codex') {
++      writeAgentCodexProviderConfig(name, { model: data.model })
++    }
+     if (data.authMode !== undefined) {
+       writeAgentAuthMode(name, data.authMode)
+       if (data.authMode === 'api' && typeof data.apiKey === 'string' && data.apiKey.trim()) {
+@@ -1899,7 +2032,20 @@
+     const name = decodeURIComponent(agentMatch[1])
+     const dir = agentDir(name)
+     if (!existsSync(dir)) { json(res, { error: 'Agent not found' }, 404); return true }
++    if (readAgentProvider(name) === 'codex') {
++      try {
++        await codexBridgeClient.request('DELETE', `/v1/agents/${encodeURIComponent(name)}`)
++      } catch (err) {
++        json(res, {
++          error: `Codex Bridge cleanup failed; the Béla agent was not deleted: ${
++            err instanceof Error ? err.message : String(err)
++          }`,
++        }, 502)
++        return true
++      }
++    }
+     rmSync(dir, { recursive: true, force: true })
++    removeDesiredAgent(name)
+     cleanupTeamReferences(name)
+     json(res, { ok: true })
+     return true
+diff -ruN a/src/web/routes/approvals.ts b/src/web/routes/approvals.ts
+--- a/src/web/routes/approvals.ts	2026-07-27 17:43:07.581174171 +0100
++++ b/src/web/routes/approvals.ts	2026-07-27 17:43:07.593174171 +0100
+@@ -10,6 +10,7 @@
+ import { logger } from '../../logger.js'
+ import { readBody, json } from '../http-helpers.js'
+ import type { RouteContext } from './types.js'
++import { codexBridgeClient } from '../../providers/codex-bridge-client.js'
+ 
+ const AUTONOMY_CONFIG_PATH = join(PROJECT_ROOT, 'store', 'autonomy-config.json')
+ 
+@@ -118,7 +119,40 @@
+     const limitRaw = url.searchParams.get('limit')
+     const limit = limitRaw ? Math.min(parseInt(limitRaw, 10) || 100, 500) : 100
+ 
+-    const items = listApprovals({ agent_id, category, status, limit })
++    const items: Array<Approval | Record<string, unknown>> = listApprovals({ agent_id, category, status, limit })
++    // Merge live Codex approvals into the existing Béla approval screen. A
++    // Bridge outage never breaks the Claude approval list; it only hides the
++    // unavailable provider rows until the next poll.
++    if (!status || status === 'pending') {
++      try {
++        const bridge = await codexBridgeClient.request<Array<{
++          approvalId: string
++          agentId: string
++          category: string
++          request: Record<string, unknown>
++          state: string
++          expiresAt: string
++          createdAt: string
++        }>>('GET', '/v1/approvals')
++        for (const approval of bridge.data) {
++          if (agent_id && approval.agentId !== agent_id) continue
++          if (category && approval.category !== category) continue
++          items.push({
++            id: `codex:${approval.approvalId}`,
++            agent_id: approval.agentId,
++            category: approval.category,
++            action_description: JSON.stringify(approval.request).slice(0, 2000),
++            action_payload: JSON.stringify(approval.request),
++            status: approval.state === 'pending' ? 'pending' : approval.state,
++            requested_at: Math.floor(Date.parse(approval.createdAt) / 1000),
++            timeout_at: Math.floor(Date.parse(approval.expiresAt) / 1000),
++            provider: 'codex',
++          })
++        }
++      } catch (err) {
++        logger.warn({ err }, 'Codex approvals unavailable while listing approvals')
++      }
++    }
+     json(res, items)
+     return true
+   }
+@@ -156,6 +190,27 @@
+     }
+     const msgId = typeof telegram_message_id === 'number' ? telegram_message_id : null
+ 
++    if (idMatch[1]!.startsWith('codex:')) {
++      const approvalId = idMatch[1]!.slice('codex:'.length)
++      try {
++        await codexBridgeClient.request(
++          'POST',
++          `/v1/approvals/${encodeURIComponent(approvalId)}/decision`,
++          { decision: status === 'approved' ? 'approve' : 'decline' },
++        )
++        json(res, {
++          id: idMatch[1],
++          status,
++          resolved_by,
++          resolved_at: Math.floor(Date.now() / 1000),
++          provider: 'codex',
++        })
++      } catch (err) {
++        json(res, { error: err instanceof Error ? err.message : 'Codex approval failed' }, 502)
++      }
++      return true
++    }
++
+     // Self-approval guard: the requesting agent cannot approve its own request.
+     // This is a best-effort check on the self-declared resolved_by value (all fleet
+     // agents share the same bearer token, so server-side identity is not enforceable).
+diff -ruN a/src/web/routes/codex-facade.ts b/src/web/routes/codex-facade.ts
+--- a/src/web/routes/codex-facade.ts	1970-01-01 01:00:00.000000000 +0100
++++ b/src/web/routes/codex-facade.ts	2026-07-27 17:43:08.173174171 +0100
+@@ -0,0 +1,165 @@
++import { createHmac, timingSafeEqual } from 'node:crypto'
++import { readFileSync } from 'node:fs'
++import { homedir } from 'node:os'
++import { join } from 'node:path'
++import { MAIN_AGENT_ID } from '../../config.js'
++import {
++  createAgentMessage,
++  getAgentMessage,
++  getDb,
++  searchAgentMemories,
++  touchMemoriesAccessed,
++  type Memory,
++} from '../../db.js'
++import { isQualifiedId } from '../federation/address.js'
++import { isKnownAgent, readAgentProvider } from '../agent-config.js'
++import { json, readBody } from '../http-helpers.js'
++import type { RouteContext } from './types.js'
++
++const TOKEN_FILE = process.env.BELA_CODEX_BRIDGE_TOKEN_FILE
++  || join(homedir(), '.config', 'bela-codex-bridge', 'token')
++const AGENT_ID = /^[a-z][a-z0-9-]{1,62}$/
++
++function authenticate(header: string | undefined): { agentId: string; scopedToken: string } | null {
++  const match = /^Bearer\s+(bcm1\.([a-z][a-z0-9-]{1,62})\.([A-Za-z0-9_-]+))$/.exec(header ?? '')
++  if (!match) return null
++  let master: string
++  try { master = readFileSync(TOKEN_FILE, 'utf8').trim() } catch { return null }
++  if (master.length < 32) return null
++  const expected = createHmac('sha256', master)
++    .update(`bela-codex-mcp:v1:${match[2]}`)
++    .digest('base64url')
++  const actualBuffer = Buffer.from(match[3]!)
++  const expectedBuffer = Buffer.from(expected)
++  if (actualBuffer.length !== expectedBuffer.length || !timingSafeEqual(actualBuffer, expectedBuffer)) return null
++  const agentId = match[2]!
++  if (!AGENT_ID.test(agentId) || !isKnownAgent(agentId) || readAgentProvider(agentId) !== 'codex') return null
++  return { agentId, scopedToken: match[1]! }
++}
++
++function memoryOpaqueId(scopedToken: string, id: number): string {
++  const mac = createHmac('sha256', scopedToken).update(`memory:v1:${id}`).digest('base64url').slice(0, 24)
++  return `${id}.${mac}`
++}
++
++function memoryView(memory: Memory, scopedToken: string): Record<string, unknown> {
++  return {
++    id: memoryOpaqueId(scopedToken, memory.id),
++    content: memory.content.slice(0, 20_000),
++    sector: memory.sector,
++    category: memory.category,
++    agentId: memory.agent_id,
++    keywords: memory.keywords,
++    createdAt: memory.created_at,
++    accessedAt: memory.accessed_at,
++  }
++}
++
++function resolveMemory(
++  opaque: string,
++  agentId: string,
++  scopedToken: string,
++): Memory | null {
++  const match = /^([1-9]\d*)\.([A-Za-z0-9_-]{24})$/.exec(opaque)
++  if (!match) return null
++  const id = Number(match[1])
++  const expected = memoryOpaqueId(scopedToken, id)
++  const actualBuffer = Buffer.from(opaque)
++  const expectedBuffer = Buffer.from(expected)
++  if (actualBuffer.length !== expectedBuffer.length || !timingSafeEqual(actualBuffer, expectedBuffer)) return null
++  return getDb().prepare(
++    "SELECT * FROM memories WHERE id = ? AND (agent_id = ? OR category = 'shared')",
++  ).get(id, agentId) as Memory | undefined ?? null
++}
++
++export async function tryHandleCodexFacade(ctx: RouteContext): Promise<boolean> {
++  const { req, res, path, method } = ctx
++  if (!path.startsWith('/api/codex-facade/')) return false
++
++  const identity = authenticate(req.headers.authorization)
++  if (!identity) {
++    json(res, { error: 'Unauthorized Codex facade token' }, 401)
++    return true
++  }
++
++  if (path === '/api/codex-facade/messages' && method === 'POST') {
++    let body: Record<string, unknown>
++    try {
++      body = JSON.parse((await readBody(req, { maxBytes: 300 * 1024 })).toString())
++    } catch {
++      json(res, { error: 'Invalid JSON' }, 400)
++      return true
++    }
++    const rawTo = typeof body.to === 'string' ? body.to.trim() : ''
++    const to = rawTo === 'bela' ? MAIN_AGENT_ID : rawTo
++    const content = typeof body.content === 'string' ? body.content.trim() : ''
++    const validTarget = to === MAIN_AGENT_ID || isKnownAgent(to) || isQualifiedId(to)
++    if (!validTarget || !content || Buffer.byteLength(content) > 256 * 1024) {
++      json(res, { error: 'Invalid target or content' }, 400)
++      return true
++    }
++    const ref = typeof body.ref === 'string' ? body.ref.slice(0, 200) : null
++    const message = createAgentMessage(identity.agentId, to, content, ref)
++    json(res, { ok: true, message: { id: message.id, status: message.status, to: message.to_agent } }, 201)
++    return true
++  }
++
++  const messageMatch = path.match(/^\/api\/codex-facade\/messages\/([1-9]\d*)$/)
++  if (messageMatch && method === 'GET') {
++    const message = getAgentMessage(Number(messageMatch[1]))
++    if (!message || message.from_agent !== identity.agentId) {
++      json(res, { error: 'Message not found' }, 404)
++      return true
++    }
++    json(res, {
++      ok: true,
++      message: {
++        id: message.id,
++        to: message.to_agent,
++        status: message.status,
++        result: message.result,
++        createdAt: message.created_at,
++        completedAt: message.completed_at,
++      },
++    })
++    return true
++  }
++
++  if (path === '/api/codex-facade/memories/search' && method === 'POST') {
++    let body: Record<string, unknown>
++    try {
++      body = JSON.parse((await readBody(req, { maxBytes: 16 * 1024 })).toString())
++    } catch {
++      json(res, { error: 'Invalid JSON' }, 400)
++      return true
++    }
++    const query = typeof body.query === 'string' ? body.query.trim().slice(0, 1000) : ''
++    const limit = Number.isInteger(body.limit) ? Math.min(20, Math.max(1, Number(body.limit))) : 10
++    if (!query) {
++      json(res, { error: 'query is required' }, 400)
++      return true
++    }
++    const memories = searchAgentMemories(identity.agentId, query, limit)
++    touchMemoriesAccessed(memories.map((memory) => memory.id))
++    json(res, {
++      ok: true,
++      memories: memories.map((memory) => memoryView(memory, identity.scopedToken)),
++    })
++    return true
++  }
++
++  const memoryMatch = path.match(/^\/api\/codex-facade\/memories\/([^/]+)$/)
++  if (memoryMatch && method === 'GET') {
++    const memory = resolveMemory(decodeURIComponent(memoryMatch[1]!), identity.agentId, identity.scopedToken)
++    if (!memory) {
++      json(res, { error: 'Memory not found' }, 404)
++      return true
++    }
++    touchMemoriesAccessed([memory.id])
++    json(res, { ok: true, memory: memoryView(memory, identity.scopedToken) })
++    return true
++  }
++
++  json(res, { error: 'Codex facade route not found' }, 404)
++  return true
++}
+diff -ruN a/src/web/routes/provider-callbacks.ts b/src/web/routes/provider-callbacks.ts
+--- a/src/web/routes/provider-callbacks.ts	1970-01-01 01:00:00.000000000 +0100
++++ b/src/web/routes/provider-callbacks.ts	2026-07-27 17:43:08.145174171 +0100
+@@ -0,0 +1,131 @@
++import { timingSafeEqual } from 'node:crypto'
++import { readFileSync } from 'node:fs'
++import { homedir } from 'node:os'
++import { join } from 'node:path'
++import { MAIN_AGENT_ID } from '../../config.js'
++import {
++  createAgentMessage,
++  getAgentMessage,
++  getDb,
++  markMessageDone,
++  markMessageFailed,
++} from '../../db.js'
++import { logger } from '../../logger.js'
++import { readAgentProvider } from '../agent-config.js'
++import { json, readBody } from '../http-helpers.js'
++import type { RouteContext } from './types.js'
++
++const TOKEN_FILE = process.env.BELA_CODEX_BRIDGE_TOKEN_FILE
++  || join(homedir(), '.config', 'bela-codex-bridge', 'token')
++
++function bridgeAuthorized(header: string | undefined): boolean {
++  const match = /^Bearer\s+(.+)$/.exec(header ?? '')
++  if (!match) return false
++  let expected: string
++  try { expected = readFileSync(TOKEN_FILE, 'utf8').trim() } catch { return false }
++  const actualBuffer = Buffer.from(match[1]!.trim())
++  const expectedBuffer = Buffer.from(expected)
++  return expectedBuffer.length >= 32
++    && actualBuffer.length === expectedBuffer.length
++    && timingSafeEqual(actualBuffer, expectedBuffer)
++}
++
++interface CallbackRun {
++  runId?: unknown
++  agentId?: unknown
++  state?: unknown
++  finalResponse?: unknown
++  errorCode?: unknown
++  errorMessage?: unknown
++  context?: unknown
++}
++
++export async function tryHandleProviderCallbacks(ctx: RouteContext): Promise<boolean> {
++  const { req, res, path, method } = ctx
++  if (path !== '/api/provider-callbacks/codex' || method !== 'POST') return false
++
++  if (!bridgeAuthorized(req.headers.authorization)) {
++    json(res, { error: 'Unauthorized Bridge callback' }, 401)
++    return true
++  }
++
++  let payload: { schemaVersion?: unknown; run?: CallbackRun }
++  try {
++    payload = JSON.parse((await readBody(req, { maxBytes: 2 * 1024 * 1024 })).toString())
++  } catch {
++    json(res, { error: 'Invalid callback JSON' }, 400)
++    return true
++  }
++  const run = payload.run
++  const context = run?.context && typeof run.context === 'object'
++    ? run.context as Record<string, unknown>
++    : {}
++  const messageId = Number(context.belaMessageId)
++  if (
++    payload.schemaVersion !== 1
++    || !run
++    || typeof run.runId !== 'string'
++    || typeof run.agentId !== 'string'
++    || typeof run.state !== 'string'
++    || !Number.isSafeInteger(messageId)
++    || messageId <= 0
++  ) {
++    json(res, { error: 'Invalid callback schema' }, 400)
++    return true
++  }
++
++  const db = getDb()
++  const result = db.transaction(() => {
++    const original = getAgentMessage(messageId)
++    if (!original) return { status: 404, body: { error: 'Original Béla message not found' } }
++    if (original.to_agent !== run.agentId || readAgentProvider(run.agentId) !== 'codex') {
++      return { status: 409, body: { error: 'Callback agent/message mismatch' } }
++    }
++    if (original.status === 'done' || original.status === 'failed') {
++      return { status: 200, body: { ok: true, duplicate: true } }
++    }
++
++    if (run.state === 'succeeded') {
++      const reply = typeof run.finalResponse === 'string' ? run.finalResponse.trim() : ''
++      const target = original.from_agent === 'system' ? MAIN_AGENT_ID : original.from_agent
++      if (reply) {
++        createAgentMessage(
++          run.agentId,
++          target,
++          reply,
++          `codex-run:${run.runId}`,
++          original.trace_id && original.span_id
++            ? {
++                trace_id: original.trace_id,
++                span_id: original.span_id,
++                parent_span_id: original.parent_span_id,
++              }
++            : null,
++        )
++      }
++      markMessageDone(messageId, `Codex run ${run.runId} completed`)
++      return { status: 200, body: { ok: true, replyQueued: Boolean(reply) } }
++    }
++
++    const reason = [
++      typeof run.errorCode === 'string' ? run.errorCode : 'codex_run_failed',
++      typeof run.errorMessage === 'string' ? run.errorMessage : `state=${run.state}`,
++    ].join(': ')
++    markMessageFailed(messageId, reason.slice(0, 2000))
++    createAgentMessage(
++      'system',
++      MAIN_AGENT_ID,
++      `[codex-bridge-failure] ${run.agentId} nem tudta feldolgozni a(z) #${messageId} üzenetet: ${reason.slice(0, 500)}`,
++    )
++    return { status: 200, body: { ok: true, failed: true } }
++  })()
++
++  logger.info({
++    runId: run.runId,
++    agentId: run.agentId,
++    messageId,
++    state: run.state,
++  }, 'Codex Bridge callback processed')
++  json(res, result.body, result.status)
++  return true
++}
+diff -ruN a/src/web/schedule-runner.ts b/src/web/schedule-runner.ts
+--- a/src/web/schedule-runner.ts	2026-07-27 17:43:07.837174171 +0100
++++ b/src/web/schedule-runner.ts	2026-07-27 17:43:07.849174171 +0100
+@@ -21,6 +21,7 @@
+   markPendingTaskRetryAlert,
+   clearPendingTaskRetryAlert,
+   markScheduledTaskKanbanWaiting,
++  createAgentMessage,
+ } from '../db.js'
+ import { toPendingRetryView, classifyTelegramSendError, type PendingRetryView } from '../pending-retries.js'
+ import {
+@@ -33,7 +34,7 @@
+   SCHEDULED_TASKS_DIR,
+   type ScheduledTask,
+ } from './scheduled-tasks-io.js'
+-import { listAgentNames, readFileOr, readAgentRemoteHost, agentDir } from './agent-config.js'
++import { listAgentNames, readFileOr, readAgentProvider, readAgentRemoteHost, agentDir } from './agent-config.js'
+ import { channelStateDir } from '../channel-provider.js'
+ import {
+   agentSessionName,
+@@ -327,6 +328,28 @@
+   lateCatchUpMs?: number,
+ ): Promise<'fired' | 'busy' | 'missing' | 'starting' | 'error' | 'mcp-missing' | 'first-run'> {
+   const isMainAgent = agentName === MAIN_AGENT_ID
++  if (!isMainAgent && readAgentProvider(agentName) === 'codex') {
++    const unavailable = (task.requires?.mcp_servers ?? []).filter((name) => name !== 'bela')
++    if (unavailable.length > 0) {
++      lastMcpMissing.set(`${task.name}@${agentName}`, unavailable)
++      logger.warn({ task: task.name, agent: agentName, missing: unavailable },
++        'Codex scheduled task requires MCP servers outside the scoped Béla facade')
++      return 'mcp-missing'
++    }
++    const taskBody = preCheckPrefix
++      ? `[Pre-check eredmeny]\n${preCheckPrefix}\n\n[Feladat]\n${task.prompt}`
++      : task.prompt
++    const fullPrompt =
++      SCHEDULED_TASK_PREAMBLE + '\n' +
++      `[Utemezett feladat: ${task.name}]\n\n` +
++      wrapScheduledTask(`scheduled-task:${task.name}`, taskBody)
++    createAgentMessage('system', agentName, fullPrompt, `schedule:${task.name}:${now}`)
++    scheduleLastRun.set(task.name, now)
++    persistScheduleLastRun()
++    appendTaskRun(task.name, agentName, lateCatchUpMs != null ? 'fired_late' : 'fired')
++    logger.info({ task: task.name, agent: agentName }, 'Scheduled task queued for Codex Bridge')
++    return 'fired'
++  }
+   // Allow per-task session override via targetSession config field.
+   // Falls back to the standard agent session name derivation.
+   const session = task.targetSession
+diff -ruN a/src/web.ts b/src/web.ts
+--- a/src/web.ts	2026-07-27 17:43:07.273174171 +0100
++++ b/src/web.ts	2026-07-27 17:43:07.285174171 +0100
+@@ -40,6 +40,8 @@
+ import { ensureFederationClaudeMdSection } from './web/federation/onboarding.js'
+ import { tryHandleAgentTerminal } from './web/routes/agent-terminal.js'
+ import { tryHandleAgentConversation } from './web/routes/agent-conversation.js'
++import { tryHandleProviderCallbacks } from './web/routes/provider-callbacks.js'
++import { tryHandleCodexFacade } from './web/routes/codex-facade.js'
+ import { tryHandleAgentTaskState } from './web/routes/agent-taskstate.js'
+ import { sweepOrphanTaskStates } from './web/agent-taskstate.js'
+ import { tryHandleDailyLog } from './web/routes/daily-log.js'
+@@ -188,6 +190,8 @@
+       if (await tryHandleSkills(routeCtx)) return
+       if (await tryHandleAgentTerminal(routeCtx)) return
+       if (await tryHandleAgentConversation(routeCtx)) return
++      if (await tryHandleProviderCallbacks(routeCtx)) return
++      if (await tryHandleCodexFacade(routeCtx)) return
+       if (await tryHandleAgentTaskState(routeCtx)) return
+       if (await tryHandleAgents(routeCtx, WEB_DIR)) return
+       if (await tryHandleMarveen(routeCtx, WEB_DIR)) return
+diff -ruN a/web/app.js b/web/app.js
+--- a/web/app.js	2026-07-27 17:43:07.981174171 +0100
++++ b/web/app.js	2026-07-27 17:43:07.989174171 +0100
+@@ -2465,6 +2465,7 @@
+ const agentName = document.getElementById('agentName')
+ const agentDesc = document.getElementById('agentDesc')
+ const agentModel = document.getElementById('agentModel')
++const agentProvider = document.getElementById('agentProvider')
+ const toast = document.getElementById('toast')
+ 
+ const AVATARS = [
+@@ -2632,6 +2633,7 @@
+   agentName.value = ''
+   agentDesc.value = ''
+   agentModel.value = 'inherit'
++  agentProvider.value = 'claude'
+   loadAvailableModels()
+   selectedAvatar = null
+   selectedAvatarFile = null
+@@ -2650,6 +2652,11 @@
+   updateWizardUI()
+ }
+ 
++agentProvider.addEventListener('change', () => {
++  if (agentProvider.value === 'codex') agentModel.value = 'gpt-5.6-terra'
++  else if (agentModel.value.startsWith('gpt-')) agentModel.value = 'inherit'
++})
++
+ function updateWizardUI() {
+   // Steps indicator
+   document.querySelectorAll('#wizardSteps .wizard-step').forEach((s) => {
+@@ -2685,6 +2692,15 @@
+         name,
+         description: desc,
+         model: agentModel.value,
++        provider: agentProvider.value,
++        providerConfig: agentProvider.value === 'codex'
++          ? {
++              model: agentModel.value,
++              sandboxMode: 'workspace-write',
++              approvalPolicy: 'bela',
++              networkEnabled: false,
++            }
++          : undefined,
+         profile: document.getElementById('agentProfile').value,
+       }),
+     })
+@@ -3317,6 +3333,13 @@
+ 
+   // Settings tab - load Ollama + DeepSeek models then set value
+   loadAvailableModels()
++  const providerSelect = document.getElementById('editAgentProvider')
++  providerSelect.value = currentAgent.provider || 'claude'
++  providerSelect.onchange = () => {
++    const modelSelect = document.getElementById('editAgentModel')
++    if (providerSelect.value === 'codex') modelSelect.value = 'gpt-5.6-terra'
++    else if (modelSelect.value.startsWith('gpt-')) modelSelect.value = 'claude-opus-4-8[1m]'
++  }
+   loadOllamaModels().then(() => {
+     const sel = document.getElementById('editAgentModel')
+     const mv = currentAgent.activeModel || currentAgent.model || 'claude-opus-4-8[1m]'
+@@ -4078,15 +4101,28 @@
+ document.getElementById('saveModelBtn').addEventListener('click', async () => {
+   if (!currentAgent || currentAgent.role === 'main') return
+   const newModel = document.getElementById('editAgentModel').value
++  const newProvider = document.getElementById('editAgentProvider').value
+   const name = currentAgent.name
+   try {
+     const res = await fetch(`/api/agents/${encodeURIComponent(name)}`, {
+       method: 'PUT',
+       headers: { 'Content-Type': 'application/json' },
+-      body: JSON.stringify({ model: newModel }),
++      body: JSON.stringify({
++        model: newModel,
++        provider: newProvider,
++        providerConfig: newProvider === 'codex'
++          ? {
++              model: newModel,
++              sandboxMode: currentAgent.providerConfig?.sandboxMode || 'workspace-write',
++              approvalPolicy: currentAgent.providerConfig?.approvalPolicy || 'bela',
++              networkEnabled: currentAgent.providerConfig?.networkEnabled === true,
++            }
++          : undefined,
++      }),
+     })
+     if (!res.ok) throw new Error()
+     currentAgent.model = newModel
++    currentAgent.provider = newProvider
+     const triggeredAt = Math.floor(Date.now() / 1000)
+     document.getElementById('agentDetailModelRestarting').hidden = false
+     document.getElementById('processLabel').textContent = t('agents.process_label')
+@@ -4100,6 +4136,20 @@
+       showToast(t('agents.restart_failed'))
+       return
+     }
++    if (newProvider === 'codex') {
++      const statusRes = await fetch(`/api/agents/${encodeURIComponent(name)}/status`)
++      const status = statusRes.ok ? await statusRes.json() : null
++      document.getElementById('agentDetailModelRestarting').hidden = true
++      document.getElementById('processDot').className = status?.actualState === 'idle'
++        || status?.actualState === 'busy'
++        ? 'process-dot running'
++        : 'process-dot'
++      document.getElementById('processLabel').textContent = status?.actualState || 'Codex Bridge'
++      document.getElementById('agentDetailModel').textContent = status?.model || newModel
++      showToast('Codex agent újraindítva')
++      loadAgents()
++      return
++    }
+     startModelRestartPolling(name, newModel, triggeredAt)
+   } catch { showToast(t('common.error_save')) }
+ })
+diff -ruN a/web/index.html b/web/index.html
+--- a/web/index.html	2026-07-27 17:43:07.929174171 +0100
++++ b/web/index.html	2026-07-27 17:43:07.937174171 +0100
+@@ -2205,8 +2205,21 @@
+             <textarea id="agentDesc" rows="4" placeholder="pl. Piackutatást végez, versenytársakat elemez, táblázatos összefoglalókat készít magyarul." data-i18n-placeholder="agents.create.desc_ph"></textarea>
+           </div>
+           <div class="form-group">
++            <label for="agentProvider">Agent motor</label>
++            <select id="agentProvider">
++              <option value="claude">Claude Code</option>
++              <option value="codex">OpenAI Codex Bridge (ChatGPT előfizetés)</option>
++            </select>
++            <small style="display:block;margin-top:6px;color:var(--text-muted);font-size:12px">
++              A Codex agent külön Bridge szolgáltatásban fut, Béla továbbra is a főagent.
++            </small>
++          </div>
++          <div class="form-group">
+             <label for="agentModel" data-i18n="agents.detail.model_label">Modell</label>
+             <select id="agentModel">
++              <optgroup label="🤖 OpenAI Codex">
++                <option value="gpt-5.6-terra">GPT-5.6 Terra (ChatGPT előfizetés)</option>
++              </optgroup>
+               <option value="inherit" data-i18n="agents.model.inherit">Öröklött (alapértelmezett)</option>
+               <optgroup label="☁️ Claude (felhő)">
+                 <option value="claude-fable-5" data-i18n="agents.model.fable5">Fable 5 (legújabb)</option>
+@@ -2366,8 +2379,18 @@
+             </div>
+           </div>
+           <div class="form-group">
++            <label for="editAgentProvider">Agent motor</label>
++            <select id="editAgentProvider">
++              <option value="claude">Claude Code</option>
++              <option value="codex">OpenAI Codex Bridge</option>
++            </select>
++          </div>
++          <div class="form-group">
+             <label for="editAgentModel" data-i18n="agents.detail.model_label">Modell</label>
+             <select id="editAgentModel">
++              <optgroup label="🤖 OpenAI Codex">
++                <option value="gpt-5.6-terra">GPT-5.6 Terra (ChatGPT előfizetés)</option>
++              </optgroup>
+               <optgroup label="☁️ Claude (felhő)">
+                 <option value="claude-fable-5" data-i18n="agents.model.fable5">Fable 5 (legújabb)</option>
+                 <option value="claude-opus-5" data-i18n="agents.model.opus5">Opus 5 (legújabb Opus)</option>

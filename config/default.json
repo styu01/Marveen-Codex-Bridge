@@ -1,0 +1,42 @@
+{
+  "api": {
+    "unixSocket": "/run/user/1000/bela-codex-bridge.sock",
+    "socketMode": 384,
+    "maxBodyBytes": 1048576
+  },
+  "codex": {
+    "binary": "/home/kisss/.local/bin/codex",
+    "expectedVersion": "0.145.0",
+    "model": "gpt-5.6-terra",
+    "startupTimeoutMs": 30000,
+    "requestTimeoutMs": 90000,
+    "turnTimeoutMs": 1800000,
+    "restartBaseDelayMs": 1000,
+    "restartMaxDelayMs": 30000,
+    "maxRestartsInWindow": 5,
+    "restartWindowMs": 300000
+  },
+  "storage": {
+    "database": "/home/kisss/.local/state/bela-codex-bridge/bridge.sqlite3",
+    "runtimeRoot": "/home/kisss/.local/share/bela-codex-bridge/agents",
+    "lockFile": "/run/user/1000/bela-codex-bridge.lock"
+  },
+  "runs": {
+    "globalConcurrency": 2,
+    "perAgentConcurrency": 1,
+    "maxQueuedPerAgent": 20,
+    "eventRetentionDays": 30,
+    "maxPromptBytes": 262144
+  },
+  "callbacks": {
+    "enabled": false,
+    "baseUrl": "http://127.0.0.1:3420",
+    "timeoutMs": 10000,
+    "maxAttempts": 12,
+    "initialDelayMs": 1000,
+    "maxDelayMs": 300000
+  },
+  "logging": {
+    "level": "info"
+  }
+}

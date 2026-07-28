@@ -1,0 +1,42 @@
+{
+  "api": {
+    "unixSocket": "@SOCKET_PATH@",
+    "socketMode": 384,
+    "maxBodyBytes": 1048576
+  },
+  "codex": {
+    "binary": "@CODEX_BIN@",
+    "expectedVersion": "0.145.0",
+    "model": "gpt-5.6-terra",
+    "startupTimeoutMs": 60000,
+    "requestTimeoutMs": 120000,
+    "turnTimeoutMs": 1800000,
+    "restartBaseDelayMs": 1000,
+    "restartMaxDelayMs": 30000,
+    "maxRestartsInWindow": 5,
+    "restartWindowMs": 300000
+  },
+  "storage": {
+    "database": "@DATABASE@",
+    "runtimeRoot": "@RUNTIME_ROOT@",
+    "lockFile": "@LOCK_PATH@"
+  },
+  "runs": {
+    "globalConcurrency": 2,
+    "perAgentConcurrency": 1,
+    "maxQueuedPerAgent": 20,
+    "eventRetentionDays": 30,
+    "maxPromptBytes": 262144
+  },
+  "callbacks": {
+    "enabled": true,
+    "baseUrl": "http://127.0.0.1:3420",
+    "timeoutMs": 10000,
+    "maxAttempts": 12,
+    "initialDelayMs": 1000,
+    "maxDelayMs": 300000
+  },
+  "logging": {
+    "level": "info"
+  }
+}

@@ -1,0 +1,290 @@
+--- a/src/web/agent-scaffold.ts
++++ b/src/web/agent-scaffold.ts
+@@ -362,6 +362,99 @@
+   }
+ }
+ 
++export interface AgentIdentityFiles {
++  claudeMd: string
++  soulMd: string
++}
++
++interface AgentIdentityGenerators {
++  claudeMd: (name: string, description: string, model: string) => Promise<string>
++  soulMd: (name: string, description: string) => Promise<string>
++}
++
++/**
++ * Codex agents must be creatable without a Claude worker or Anthropic API.
++ * Marveen still stores the provider-neutral identity in CLAUDE.md/SOUL.md for
++ * dashboard and fleet compatibility; the Codex provider compiles their content
++ * into the Bridge's AGENTS.md developer instructions before the first turn.
++ */
++export function buildCodexAgentIdentityFiles(name: string, description: string): AgentIdentityFiles {
++  const cleanName = name.trim()
++  const cleanDescription = description.trim()
++  const claudeMd = `# ${cleanName}
++
++> ${cleanDescription}
++
++## Szerep és felelősség
++
++- Elsődleges feladatod: ${cleanDescription}
++- Béla alárendelt Codex-agentjeként dolgozol; Béla a főagent és koordinátor.
++- A kapott feladatot a rendelkezésre álló kontextus és eszközök alapján hajtsd végre.
++- Ne találj ki adatot, eredményt vagy sikeres műveletet. A bizonytalanságot egyértelműen jelezd.
++
++## Működési szabályok
++
++- Csak a Codex Bridge által kijelölt munkakönyvtárban dolgozz.
++- Külső vagy visszafordíthatatlan műveletet csak a beállított jóváhagyási szabály szerint végezz.
++- Más agent nevében ne kommunikálj, és más agent azonosítóját ne használd.
++- Ha a feladat Bélától kapott kiegészítő döntést vagy jogosultságot igényel, küldj neki agentüzenetet.
++- A Béla MCP-eszközöket kizárólag a saját agentazonosítóddal használd.
++
++## Kommunikáció
++
++- ${OWNER_NAME} számára alapértelmezetten magyarul, világosan és tárgyilagosan válaszolj.
++- Kód, parancsok, azonosítók és szabványos technikai kifejezések maradhatnak angolul.
++- Először az eredményt közöld, majd csak a döntéshez vagy ellenőrzéshez szükséges részleteket.
++- Ne állítsd, hogy egy művelet elkészült, amíg azt ellenőrizhetően végre nem hajtottad.
++
++## Béla-kapcsolat és memória
++
++- Másik agentnek a \`bela_agent_message_send\` eszközzel küldj üzenetet.
++- Az elküldött üzenet állapotát a \`bela_agent_message_status\` eszközzel ellenőrizheted.
++- Releváns korábbi információ kereséséhez használd a \`bela_memory_search\`, részletes beolvasásához a \`bela_memory_get\` eszközt.
++- Ha olyan képesség kell, amelyet a Bridge nem adott át, jelezd ${BOT_NAME} főagentnek (${MAIN_AGENT_ID}); ne próbáld megkerülni a korlátozást.
++`
++  const soulMd = `# ${cleanName} személyisége
++
++## Alapkarakter
++
++- Megbízható, precíz és feladatorientált.
++- Önállóan gondolkodik, de elfogadja, hogy Béla a koordináló főagent.
++- Nem szépíti a hibákat és nem leplezi a bizonytalanságot.
++
++## Kommunikációs stílus
++
++- Tömör, világos és szakmai.
++- ${OWNER_NAME} felé magyarul kommunikál, hacsak a feladat más nyelvet nem kíván.
++- A fontos kockázatokat, hiányzó adatokat és ellenőrizetlen feltételezéseket külön jelzi.
++
++## Kerülendő viselkedés
++
++- Fiktív eredmény vagy elvégzett művelet állítása.
++- Indokolatlanul hosszú, ismétlődő válasz.
++- Más agent megszemélyesítése vagy a jóváhagyási rendszer megkerülése.
++`
++  return { claudeMd, soulMd }
++}
++
++export async function generateAgentIdentityFiles(
++  provider: 'claude' | 'codex',
++  name: string,
++  description: string,
++  model: string,
++  generators: AgentIdentityGenerators = {
++    claudeMd: generateClaudeMd,
++    soulMd: generateSoulMd,
++  },
++): Promise<AgentIdentityFiles> {
++  if (provider === 'codex') return buildCodexAgentIdentityFiles(name, description)
++  const [claudeMd, soulMd] = await Promise.all([
++    generators.claudeMd(name, description, model),
++    generators.soulMd(name, description),
++  ])
++  return { claudeMd, soulMd }
++}
++
+ export async function generateClaudeMd(name: string, description: string, model: string): Promise<string> {
+   // Distribution-safe default-drive line: only emit a concrete folder when this
+   // install has one configured (OWNER_DRIVE_FOLDER). A fresh install with no
+--- a/src/web/routes/agents.ts
++++ b/src/web/routes/agents.ts
+@@ -80,8 +80,7 @@
+ import {
+   writeAgentSettingsFromProfile,
+   scaffoldAgentDir,
+-  generateClaudeMd,
+-  generateSoulMd,
++  generateAgentIdentityFiles,
+ } from '../agent-scaffold.js'
+ import {
+   isAgentRunning,
+@@ -718,12 +717,14 @@
+     writeAgentSettingsFromProfile(name, loadProfileTemplate(profileId))
+     if (rawName && rawName !== name) writeAgentDisplayName(name, rawName)
+ 
+-    logger.info({ name, description }, 'Generating agent CLAUDE.md and SOUL.md...')
++    logger.info({ name, description, provider }, 'Generating agent identity files...')
+     try {
+-      const [claudeMd, soulMd] = await Promise.all([
+-        generateClaudeMd(name, description, generationModel),
+-        generateSoulMd(name, description),
+-      ])
++      const { claudeMd, soulMd } = await generateAgentIdentityFiles(
++        provider,
++        name,
++        description,
++        generationModel,
++      )
+       atomicWriteFileSync(join(agentDir(name), 'CLAUDE.md'), claudeMd)
+       atomicWriteFileSync(join(agentDir(name), 'SOUL.md'), soulMd)
+       logger.info({ name }, 'Agent created successfully')
+--- a/web/app.js
++++ b/web/app.js
+@@ -2179,14 +2179,30 @@
+     document.getElementById('agentProfileDesc'),
+     'default',
+   )
++  updateWizardProviderUI()
+   updateWizardUI()
+ }
+ 
+ agentProvider.addEventListener('change', () => {
+   if (agentProvider.value === 'codex') agentModel.value = 'gpt-5.6-terra'
+   else if (agentModel.value.startsWith('gpt-')) agentModel.value = 'inherit'
++  updateWizardProviderUI()
+ })
+ 
++function updateWizardProviderUI() {
++  const codex = agentProvider.value === 'codex'
++  const identityLabel = document.getElementById('wizardClaudeMdLabel')
++  const soulLabel = document.getElementById('wizardSoulMdLabel')
++  const hint = document.getElementById('wizardGenHint')
++  if (identityLabel) identityLabel.textContent = codex
++    ? 'Agent instrukciók (Codex AGENTS.md forrás)'
++    : 'CLAUDE.md'
++  if (soulLabel) soulLabel.textContent = codex ? 'Agent személyiség' : 'SOUL.md'
++  if (hint) hint.textContent = codex
++    ? 'A Codex-kompatibilis instrukciók helyben, Claude-függőség nélkül készülnek'
++    : t('agents.wizard.gen_hint')
++}
++
+ function updateWizardUI() {
+   // Steps indicator
+   document.querySelectorAll('#wizardSteps .wizard-step').forEach((s) => {
+@@ -2204,6 +2220,7 @@
+ document.getElementById('wizardNextBtn').addEventListener('click', async () => {
+   const name = agentName.value.trim()
+   const desc = agentDesc.value.trim()
++  const provider = agentProvider.value
+   if (!name) { agentName.focus(); return }
+   if (!desc) { agentDesc.focus(); return }
+ 
+@@ -2211,7 +2228,9 @@
+   updateWizardUI()
+ 
+   const statusEl = document.getElementById('wizardGenStatus')
+-  statusEl.textContent = t('agents.claude_md_generating')
++  statusEl.textContent = provider === 'codex'
++    ? 'Codex agent-instrukciók létrehozása...'
++    : t('agents.claude_md_generating')
+ 
+   try {
+     // Create agent via API (returns generated content)
+@@ -2222,8 +2241,8 @@
+         name,
+         description: desc,
+         model: agentModel.value,
+-        provider: agentProvider.value,
+-        providerConfig: agentProvider.value === 'codex'
++        provider,
++        providerConfig: provider === 'codex'
+           ? {
+               model: agentModel.value,
+               sandboxMode: 'workspace-write',
+@@ -2246,7 +2265,9 @@
+     // like "étrendíró" still resolves to the real agent dir "etrendiro".
+     const createdName = result.name || name
+     wizardCreatedName = createdName
+-    statusEl.textContent = t('agents.soul_md_generating')
++    statusEl.textContent = provider === 'codex'
++      ? 'Codex agent konfigurációjának ellenőrzése...'
++      : t('agents.soul_md_generating')
+ 
+     // Fetch full agent details to get generated content
+     const detailRes = await fetch(`/api/agents/${encodeURIComponent(createdName)}`)
+--- a/web/index.html
++++ b/web/index.html
+@@ -1941,18 +1941,18 @@
+               <span class="spinner wizard-spin"></span>
+             </div>
+             <p class="wizard-gen-status" id="wizardGenStatus" data-i18n="agents.wizard.generating_status">CLAUDE.md generálás...</p>
+-            <p class="wizard-gen-sub" data-i18n="agents.wizard.gen_hint">Ez néhány másodpercig tarthat</p>
++            <p class="wizard-gen-sub" id="wizardGenHint" data-i18n="agents.wizard.gen_hint">Ez néhány másodpercig tarthat</p>
+           </div>
+         </div>
+ 
+         <!-- Step 3: Review -->
+         <div class="wizard-panel" id="wizardStep3" hidden>
+           <div class="form-group">
+-            <label for="wizardClaudeMd">CLAUDE.md</label>
++            <label for="wizardClaudeMd" id="wizardClaudeMdLabel">CLAUDE.md</label>
+             <textarea id="wizardClaudeMd" class="code-textarea" rows="10"></textarea>
+           </div>
+           <div class="form-group">
+-            <label for="wizardSoulMd">SOUL.md</label>
++            <label for="wizardSoulMd" id="wizardSoulMdLabel">SOUL.md</label>
+             <textarea id="wizardSoulMd" class="code-textarea" rows="8"></textarea>
+           </div>
+           <div class="wizard-actions">
+--- a/src/__tests__/codex-agent-identity.test.ts
++++ b/src/__tests__/codex-agent-identity.test.ts
+@@ -0,0 +1,55 @@
++import { describe, expect, it, vi } from 'vitest'
++import {
++  buildCodexAgentIdentityFiles,
++  generateAgentIdentityFiles,
++} from '../web/agent-scaffold.js'
++
++describe('Codex agent identity generation', () => {
++  it('builds deterministic provider-neutral identity and soul files', () => {
++    const result = buildCodexAgentIdentityFiles(
++      'codex-kutato',
++      'Piackutatást végez és ellenőrzött összefoglalót készít.',
++    )
++
++    expect(result.claudeMd).toContain('# codex-kutato')
++    expect(result.claudeMd).toContain('Piackutatást végez')
++    expect(result.claudeMd).toContain('bela_agent_message_send')
++    expect(result.claudeMd).not.toContain('tmux')
++    expect(result.soulMd).toContain('codex-kutato személyisége')
++  })
++
++  it('does not call either Claude generator for a Codex provider', async () => {
++    const claudeMd = vi.fn(async () => { throw new Error('Claude must not run') })
++    const soulMd = vi.fn(async () => { throw new Error('Claude must not run') })
++
++    const result = await generateAgentIdentityFiles(
++      'codex',
++      'codex-kutato',
++      'Kutatási feladatokat végez.',
++      'gpt-5.6-terra',
++      { claudeMd, soulMd },
++    )
++
++    expect(result.claudeMd).toContain('Kutatási feladatokat végez.')
++    expect(claudeMd).not.toHaveBeenCalled()
++    expect(soulMd).not.toHaveBeenCalled()
++  })
++
++  it('keeps the existing generators for Claude agents', async () => {
++    const claudeMd = vi.fn(async () => 'generated CLAUDE.md')
++    const soulMd = vi.fn(async () => 'generated SOUL.md')
++
++    await expect(generateAgentIdentityFiles(
++      'claude',
++      'claude-kutato',
++      'Kutat.',
++      'claude-opus',
++      { claudeMd, soulMd },
++    )).resolves.toEqual({
++      claudeMd: 'generated CLAUDE.md',
++      soulMd: 'generated SOUL.md',
++    })
++    expect(claudeMd).toHaveBeenCalledOnce()
++    expect(soulMd).toHaveBeenCalledOnce()
++  })
++})

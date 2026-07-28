@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "bridgeVersion": "0.1.8",
+  "node": {
+    "major": 22,
+    "tested": "22.23.1",
+    "binary": "/home/kisss/.nvm/versions/node/v22.23.1/bin/node"
+  },
+  "codex": {
+    "version": "0.145.0",
+    "binary": "/home/kisss/.local/bin/codex",
+    "protocol": "app-server-jsonl",
+    "experimental": true
+  },
+  "models": {
+    "default": "gpt-5.6-terra",
+    "verifiedWithChatGptSubscription": [
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+      "gpt-5.4-mini"
+    ],
+    "rejectedWithChatGptSubscription": [
+      "gpt-5.6-sol",
+      "gpt-5.6"
+    ]
+  }
+}

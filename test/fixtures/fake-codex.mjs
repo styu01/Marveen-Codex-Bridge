@@ -2,6 +2,8 @@
 
 import readline from 'node:readline'
 import { randomUUID } from 'node:crypto'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const args = process.argv.slice(2)
 if (args[0] === '--version') {
@@ -105,7 +107,7 @@ input.on('line', (line) => {
     completeTurn(
       pending.threadId,
       pending.turnId,
-      `FAKE_DYNAMIC_TOOL_OK:${String(result.success)}:${output}`,
+      pending.completionText ?? `FAKE_DYNAMIC_TOOL_OK:${String(result.success)}:${output}`,
     )
     return
   }
@@ -116,6 +118,14 @@ input.on('line', (line) => {
   }
   if (method === 'model/list') {
     respond(id, { data: [{ model: 'gpt-5.6-terra' }, { model: 'gpt-5.5' }] })
+    return
+  }
+  if (method === 'modelProvider/capabilities/read') {
+    respond(id, {
+      imageGeneration: true,
+      namespaceTools: true,
+      webSearch: false,
+    })
     return
   }
   if (method === 'thread/start') {
@@ -162,6 +172,142 @@ input.on('line', (line) => {
     const turnId = randomUUID()
     respond(id, { turn: { id: turnId } })
     const text = params.input?.[0]?.text ?? ''
+    if (text.includes('IMAGE_GENERATION_TEST')) {
+      setTimeout(() => {
+        const outputDir = join(params.cwd, '.bela', 'generated-images')
+        mkdirSync(outputDir, { recursive: true })
+        const savedPath = join(outputDir, `${turnId}.png`)
+        writeFileSync(
+          savedPath,
+          Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+            'base64',
+          ),
+        )
+        write({
+          method: 'item/completed',
+          params: {
+            threadId: params.threadId,
+            turnId,
+            item: {
+              type: 'imageGeneration',
+              id: `image-${turnId}`,
+              status: 'completed',
+              result: 'generated',
+              revisedPrompt: 'A deterministic one-pixel PNG fixture',
+              savedPath,
+            },
+          },
+        })
+        completeTurn(params.threadId, turnId, 'FAKE_IMAGE_GENERATION_OK')
+      }, 10)
+      return
+    }
+    if (text.includes('IMAGE_ESCAPE_TEST')) {
+      setTimeout(() => {
+        const savedPath = join('/tmp', `${turnId}.png`)
+        writeFileSync(
+          savedPath,
+          Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+            'base64',
+          ),
+        )
+        write({
+          method: 'item/completed',
+          params: {
+            threadId: params.threadId,
+            turnId,
+            item: {
+              type: 'imageGeneration',
+              id: `image-${turnId}`,
+              status: 'completed',
+              result: 'generated',
+              revisedPrompt: null,
+              savedPath,
+            },
+          },
+        })
+        completeTurn(params.threadId, turnId, 'FAKE_IMAGE_ESCAPE')
+      }, 10)
+      return
+    }
+    if (text.includes('IMAGE_STAGING_REGISTRATION_TEST')) {
+      setTimeout(() => {
+        const thread = threads.get(params.threadId) ?? {}
+        const tool = thread.dynamicTools?.find(
+          (candidate) => candidate.name === 'bela_image_artifact_register',
+        )
+        if (!tool) {
+          completeTurn(params.threadId, turnId, 'FAKE_IMAGE_REGISTER_TOOL_MISSING')
+          return
+        }
+        const image = Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+          'base64',
+        )
+        const stagingPath = join('/tmp', `provider-staging-${turnId}.png`)
+        writeFileSync(stagingPath, image)
+        write({
+          method: 'item/completed',
+          params: {
+            threadId: params.threadId,
+            turnId,
+            item: {
+              type: 'imageGeneration',
+              id: `image-${turnId}`,
+              status: 'completed',
+              result: 'generated',
+              revisedPrompt: 'A provider staging image copied into the workspace',
+              savedPath: stagingPath,
+            },
+          },
+        })
+
+        const outputDir = join(params.cwd, 'assets')
+        mkdirSync(outputDir, { recursive: true })
+        writeFileSync(join(outputDir, 'final-image.png'), image)
+        const callId = randomUUID()
+        const requestId = `dynamic-${callId}`
+        const argumentsValue = { path: 'assets/final-image.png' }
+        pendingDynamicCalls.set(requestId, {
+          threadId: params.threadId,
+          turnId,
+          callId,
+          tool: tool.name,
+          arguments: argumentsValue,
+          completionText: 'FAKE_IMAGE_STAGING_REGISTRATION_OK',
+        })
+        write({
+          method: 'item/started',
+          params: {
+            threadId: params.threadId,
+            turnId,
+            item: {
+              type: 'dynamicToolCall',
+              id: callId,
+              namespace: null,
+              tool: tool.name,
+              arguments: argumentsValue,
+              status: 'inProgress',
+            },
+          },
+        })
+        write({
+          id: requestId,
+          method: 'item/tool/call',
+          params: {
+            threadId: params.threadId,
+            turnId,
+            callId,
+            namespace: null,
+            tool: tool.name,
+            arguments: argumentsValue,
+          },
+        })
+      }, 10)
+      return
+    }
     if (text.includes('DYNAMIC_TOOL_TEST')) {
       setTimeout(() => {
         const thread = threads.get(params.threadId) ?? {}

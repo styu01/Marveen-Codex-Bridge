@@ -1,4 +1,5 @@
-export const BELA_DYNAMIC_TOOL_CONTRACT_REVISION = 1
+export const BELA_DYNAMIC_TOOL_CONTRACT_REVISION = 2
+export const BELA_IMAGE_ARTIFACT_REGISTER_TOOL = 'bela_image_artifact_register'
 
 export const BELA_TOOL_SPECS = [
   {
@@ -78,12 +79,40 @@ export const BELA_TOOL_SPECS = [
   },
 ] as const
 
-export const BELA_DYNAMIC_TOOLS = BELA_TOOL_SPECS.map((tool) => ({
-  name: tool.name,
-  description: tool.description,
-  inputSchema: tool.inputSchema,
-  deferLoading: false,
-}))
+const IMAGE_ARTIFACT_REGISTER_SPEC = {
+  name: BELA_IMAGE_ARTIFACT_REGISTER_TOOL,
+  description: [
+    'Register a finalized image file as an artifact of the current Béla run.',
+    'The path must be relative to this agent workspace.',
+    'Call this only after image generation, copying, resizing, and all other edits are complete.',
+  ].join(' '),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      path: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 4096,
+        description: 'Final image path relative to the configured agent workspace.',
+      },
+    },
+    required: ['path'],
+    additionalProperties: false,
+  },
+} as const
+
+export const BELA_DYNAMIC_TOOLS = [
+  ...BELA_TOOL_SPECS.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.inputSchema,
+    deferLoading: false,
+  })),
+  {
+    ...IMAGE_ARTIFACT_REGISTER_SPEC,
+    deferLoading: false,
+  },
+]
 
 export type BelaToolName = typeof BELA_TOOL_SPECS[number]['name']
 

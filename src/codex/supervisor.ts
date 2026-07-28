@@ -11,6 +11,11 @@ export class CodexSupervisor {
   private clientValue: CodexProtocolClient | null = null
   private generationValue = 0
   private compatibleValue = false
+  private providerCapabilitiesValue = {
+    imageGeneration: false,
+    namespaceTools: false,
+    webSearch: false,
+  }
   private starting: Promise<CodexProtocolClient> | null = null
   private restartHistory: number[] = []
 
@@ -22,6 +27,9 @@ export class CodexSupervisor {
 
   get generation(): number { return this.generationValue }
   get compatible(): boolean { return this.compatibleValue }
+  get providerCapabilities(): Readonly<typeof this.providerCapabilitiesValue> {
+    return this.providerCapabilitiesValue
+  }
   get online(): boolean { return this.clientValue?.running ?? false }
   get client(): CodexProtocolClient {
     if (!this.clientValue?.running) throw new BridgeError('app_server_offline', 'Codex App Server is offline', 503)
@@ -88,6 +96,11 @@ export class CodexSupervisor {
     )
     client.on('exit', (error: Error) => {
       this.compatibleValue = false
+      this.providerCapabilitiesValue = {
+        imageGeneration: false,
+        namespaceTools: false,
+        webSearch: false,
+      }
       if (this.clientValue === client) this.clientValue = null
       this.logger.error('Codex App Server exited', { error: error.message })
     })
@@ -102,6 +115,11 @@ export class CodexSupervisor {
 
   async stop(): Promise<void> {
     this.compatibleValue = false
+    this.providerCapabilitiesValue = {
+      imageGeneration: false,
+      namespaceTools: false,
+      webSearch: false,
+    }
     const client = this.clientValue
     this.clientValue = null
     if (client) await client.stop()
@@ -125,6 +143,21 @@ export class CodexSupervisor {
         { availableModels: models },
       )
     }
+    const capabilities = await client.request(
+      'modelProvider/capabilities/read',
+      {},
+      60000,
+    ) as {
+      imageGeneration?: unknown
+      namespaceTools?: unknown
+      webSearch?: unknown
+    }
+    this.providerCapabilitiesValue = {
+      imageGeneration: capabilities.imageGeneration === true,
+      namespaceTools: capabilities.namespaceTools === true,
+      webSearch: capabilities.webSearch === true,
+    }
+    this.logger.info('Codex provider capabilities loaded', this.providerCapabilitiesValue)
   }
 }
 

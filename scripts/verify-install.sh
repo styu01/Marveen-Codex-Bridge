@@ -81,20 +81,30 @@ META_JSON="$(curl --silent --show-error --fail --unix-socket "${SOCKET_PATH}" \
 if ! "${NODE_BIN}" -e '
   const meta = JSON.parse(process.argv[1])
   if (
-    meta.bridgeVersion !== "0.1.8"
-    || meta.toolContract?.revision !== 1
+    meta.bridgeVersion !== "0.2.1"
+    || meta.toolContract?.revision !== 2
     || !meta.toolContract?.exposure?.includes("dynamicTools")
-    || meta.toolContract?.tools?.length !== 4
+    || meta.toolContract?.tools?.length !== 5
+    || !meta.toolContract?.tools?.includes("bela_image_artifact_register")
+    || meta.toolContract?.mcpTools?.length !== 4
+    || meta.toolContract?.mcpTools?.includes("bela_image_artifact_register")
+    || JSON.stringify(meta.codex?.reasoningEfforts) !== JSON.stringify(["medium", "high", "xhigh"])
+    || meta.codex?.defaultReasoningEffort !== "medium"
+    || meta.codex?.providerCapabilities?.imageGeneration !== true
+    || meta.codex?.imageGeneration?.available !== true
+    || meta.codex?.imageGeneration?.model !== "gpt-image-2"
+    || meta.codex?.imageGeneration?.effort !== null
+    || meta.codex?.imageGeneration?.billing !== "chatgpt-subscription"
   ) process.exit(1)
 ' "${META_JSON}"
 then
   echo "${META_JSON}" >&2
-  fail "Bridge metadata is not from release 0.1.8"
+  fail "Bridge metadata is not from release 0.2.1 or final image registration is unavailable"
 fi
 if [[ -z "${META_JSON}" ]]; then
   fail "authenticated Bridge metadata request failed"
 fi
-pass "Bridge bearer authentication reports release 0.1.8 and dynamic tool contract 1"
+pass "Bridge bearer authentication reports release 0.2.1, dynamic tool contract 2, and GPT-Image-2 capability"
 
 pass "Codex App Server compatibility probe is ready"
 
@@ -108,9 +118,24 @@ rg -q "tool_contract_revision" "${INSTALL_ROOT}/migrations/002_dynamic_tool_cont
   || fail "dynamic tool database migration is missing"
 rg -q "app_server_generation" "${INSTALL_ROOT}/migrations/003_approval_request_identity.sql" \
   || fail "approval request identity migration is missing"
+rg -q "reasoning_effort" "${INSTALL_ROOT}/migrations/004_reasoning_effort.sql" \
+  || fail "reasoning effort database migration is missing"
+rg -q "bridge_artifacts" "${INSTALL_ROOT}/migrations/005_image_artifacts.sql" \
+  || fail "image artifact database migration is missing"
+rg -q "imageGeneration" "${INSTALL_ROOT}/dist/src/codex/supervisor.js" \
+  || fail "compiled image-generation capability probe is missing"
+rg -q "image_artifact_rejected" "${INSTALL_ROOT}/dist/src/runs/run-engine.js" \
+  || fail "compiled fail-closed image artifact handler is missing"
+rg -q "bela_image_artifact_register" "${INSTALL_ROOT}/dist/src/runs/run-engine.js" \
+  || fail "compiled final image artifact registrar is missing"
+rg -q "image_provider_staging_observed" "${INSTALL_ROOT}/dist/src/runs/run-engine.js" \
+  || fail "compiled provider staging handler is missing"
+rg -q "model_reasoning_effort: agent.reasoningEffort" \
+  "${INSTALL_ROOT}/dist/src/runtime/runtime-manager.js" \
+  || fail "compiled per-agent reasoning effort runtime is missing"
 rg -q "shouldEnqueueProviderCallback" "${INSTALL_ROOT}/dist/src/runs/run-engine.js" \
   || fail "message-scoped provider callback gate is missing"
-pass "dynamic tools, callback gate, identity guard, and database migrations are installed"
+pass "dynamic tools, callback gate, identity guard, and workspace-final image artifact pipeline are installed"
 
 DATABASE_PATH="$("${NODE_BIN}" -e \
   "const c=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')); process.stdout.write(c.storage.database)" \
@@ -120,14 +145,20 @@ DATABASE_PATH="$("${NODE_BIN}" -e \
   const db = new Database(process.argv[2], { readonly: true })
   const threadColumns = db.prepare("PRAGMA table_info(codex_threads)").all()
   const approvalColumns = db.prepare("PRAGMA table_info(bridge_approvals)").all()
+  const agentColumns = db.prepare("PRAGMA table_info(bridge_agents)").all()
+  const artifactColumns = db.prepare("PRAGMA table_info(bridge_artifacts)").all()
   const approvalIndexes = db.prepare("PRAGMA index_list(bridge_approvals)").all()
   db.close()
   if (!threadColumns.some((column) => column.name === "tool_contract_revision")) process.exit(1)
+  if (!threadColumns.some((column) => column.name === "reasoning_effort")) process.exit(1)
+  if (!agentColumns.some((column) => column.name === "reasoning_effort")) process.exit(1)
   if (!approvalColumns.some((column) => column.name === "app_server_generation")) process.exit(1)
+  if (!artifactColumns.some((column) => column.name === "sha256")) process.exit(1)
+  if (!artifactColumns.some((column) => column.name === "workspace_relative_path")) process.exit(1)
   if (approvalIndexes.some((index) => index.unique === 1 && index.name.includes("provider"))) process.exit(1)
 ' "${INSTALL_ROOT}/node_modules/better-sqlite3" "${DATABASE_PATH}" \
   || fail "Bridge database migrations were not applied correctly"
-pass "dynamic tool and approval identity database migrations are applied"
+pass "dynamic tool, approval identity, reasoning effort, and image artifact migrations are applied"
 
 DOCTOR_LOG="$(mktemp)"
 trap 'rm -f "${DOCTOR_LOG}"' EXIT
@@ -154,13 +185,23 @@ if [[ "${BRIDGE_ONLY}" -eq 0 ]]; then
     || fail "Compiled Codex message router is missing from Marveen dist"
   [[ -f "${MARVEEN_ROOT}/dist/providers/codex-provider.js" ]] \
     || fail "Compiled Codex provider is missing from Marveen dist"
-  rg -q "CODEX_CALLBACK_ADAPTER_REVISION = 2" \
+  rg -q "CODEX_CALLBACK_ADAPTER_REVISION = 3" \
     "${MARVEEN_ROOT}/src/web/routes/provider-callbacks.ts" \
     || fail "Marveen callback deduplication source is missing"
-  rg -q "CODEX_CALLBACK_ADAPTER_REVISION = 2" \
+  rg -q "CODEX_CALLBACK_ADAPTER_REVISION = 3" \
     "${MARVEEN_ROOT}/dist/web/routes/provider-callbacks.js" \
     || fail "Compiled Marveen callback deduplication is missing"
-  pass "Marveen Codex adapter revision 2 source and compiled dist hooks are installed"
+  rg -q "reasoningEffort" "${MARVEEN_ROOT}/src/providers/codex-provider.ts" \
+    || fail "Marveen reasoning effort source adapter is missing"
+  rg -q "reasoningEffort" "${MARVEEN_ROOT}/dist/providers/codex-provider.js" \
+    || fail "Compiled Marveen reasoning effort adapter is missing"
+  rg -q "agentReasoningEffort" "${MARVEEN_ROOT}/web/app.js" \
+    || fail "Marveen reasoning effort dashboard control is missing"
+  [[ -f "${MARVEEN_ROOT}/dist/web/routes/codex-artifacts.js" ]] \
+    || fail "Compiled Marveen Codex artifact proxy is missing"
+  rg -q "hydrateCodexImages" "${MARVEEN_ROOT}/web/app.js" \
+    || fail "Marveen authenticated image preview is missing"
+  pass "Marveen Codex adapter revision 4 source, dist, and image hooks are installed"
 
   if systemctl --user is-active --quiet bela-dashboard.service; then
     DASHBOARD_PID="$(systemctl --user show bela-dashboard.service -p MainPID --value)"

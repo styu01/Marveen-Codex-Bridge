@@ -60,7 +60,7 @@ rl.on('line', (line) => {
     result({
       protocolVersion: message.params?.protocolVersion ?? '2025-06-18',
       capabilities: { tools: {} },
-      serverInfo: { name: `bela-codex-mcp-${agentId}`, version: '0.1.8' },
+      serverInfo: { name: `bela-codex-mcp-${agentId}`, version: '0.2.1' },
     })
   } else if (message.method === 'ping') {
     result({})

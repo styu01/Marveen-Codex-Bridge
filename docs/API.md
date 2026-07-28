@@ -16,11 +16,32 @@ Béla-eszközszerződést is:
 
 ```json
 {
-  "bridgeVersion": "0.1.8",
+  "bridgeVersion": "0.2.1",
+  "codex": {
+    "reasoningEfforts": ["medium", "high", "xhigh"],
+    "defaultReasoningEffort": "medium",
+    "providerCapabilities": {
+      "imageGeneration": true
+    },
+    "imageGeneration": {
+      "available": true,
+      "model": "gpt-image-2",
+      "effort": null,
+      "transport": "codex-app-server",
+      "billing": "chatgpt-subscription"
+    }
+  },
   "toolContract": {
-    "revision": 1,
+    "revision": 2,
     "exposure": ["dynamicTools", "mcpInventory"],
     "tools": [
+      "bela_agent_message_send",
+      "bela_agent_message_status",
+      "bela_memory_search",
+      "bela_memory_get",
+      "bela_image_artifact_register"
+    ],
+    "mcpTools": [
       "bela_agent_message_send",
       "bela_agent_message_status",
       "bela_memory_search",
@@ -30,10 +51,12 @@ Béla-eszközszerződést is:
 }
 ```
 
-Az `mcpInventory` a threadhez indított, agent-scoped MCP szervert jelenti. A
-`dynamicTools` ugyanennek a négy capabilitynek a közvetlen modelloldali
-kivetítése. Az App Server `item/tool/call` szerverkéréseit a Bridge belsőleg
-kezeli; ez nem nyilvános HTTP végpont.
+Az `mcpInventory` a threadhez indított, agent-scoped MCP szervert jelenti.
+Annak tooljai a `mcpTools` négyelemű listában vannak. A `dynamicTools`
+ugyanezt a négy Béla-capabilityt közvetlenül a modell felé vetíti, továbbá
+csak ezen az útvonalon érhető el az ötödik
+`bela_image_artifact_register`. Az App Server `item/tool/call`
+szerverkéréseit a Bridge belsőleg kezeli; ez nem nyilvános HTTP végpont.
 
 ## Agent
 
@@ -43,6 +66,7 @@ kezeli; ez nem nyilvános HTTP végpont.
 {
   "displayName": "Codex Dev",
   "model": "gpt-5.6-terra",
+  "reasoningEffort": "high",
   "workspacePath": "/home/kisss/marveen/agents/codex-dev",
   "workspaceMode": "directory",
   "sandboxMode": "workspace-write",
@@ -51,6 +75,12 @@ kezeli; ez nem nyilvános HTTP végpont.
   "instructions": "..."
 }
 ```
+
+`reasoningEffort` csak `medium`, `high` vagy `xhigh` lehet. Hiányzó mezőnél
+az API visszafelé kompatibilis `medium` értéket használ. Az effort változása
+növeli az agent `configRevision` értékét, a korábbi threadet invalidálja, és a
+következő run új threadben indul. Aktív run közben az effortváltás `409
+agent_busy` hibát ad.
 
 Lifecycle:
 
@@ -90,8 +120,51 @@ Azonos kulcs és azonos payload ugyanazt a runt adja vissza
 `"duplicate": true` jelzéssel. Azonos kulcs eltérő payload mellett `409`.
 
 - `GET /v1/runs/:runId`
+- `GET /v1/runs/:runId/artifacts`
 - `GET /v1/runs/:runId/events?after=0&limit=500`
 - `POST /v1/runs/:runId/interrupt`
+
+Az App Server `imageGeneration.savedPath` mezője lehet workspace-en kívüli
+provider-staging fájl; ez önmagában nem végleges artifact. A Codexnek a
+másolás, átméretezés és minden szerkesztés után a végleges
+workspace-relatív útvonalat át kell adnia a
+`bela_image_artifact_register` toolnak. Imagegen run regisztrált kép nélkül
+`image_artifact_missing` hibával zárul.
+
+Sikeres képgenerálásnál a run `artifacts` tömbje tartalmazza a képet. A fájl
+csak akkor lesz `ready`, ha canonical útvonala a megfelelő agent workspace-én
+belül van, normál és nem symlink fájl, mérete a konfigurált limit alatt marad,
+és a magic bytes alapján PNG, JPEG vagy WebP. Ismételt regisztráció ugyanarra
+a run+végleges útvonalra ugyanazt az artifactot frissíti, nem duplikál.
+
+## Képartifact
+
+- `GET /v1/artifacts/:artifactId`
+
+Példa:
+
+```json
+{
+  "artifactId": "76b94870-dcdd-4b21-8ea6-d6ad52e619ef",
+  "runId": "...",
+  "agentId": "codex-dev",
+  "providerItemId": "...",
+  "kind": "image",
+  "status": "ready",
+  "mimeType": "image/png",
+  "fileName": "hero.png",
+  "absolutePath": "/home/kisss/marveen/agents/codex-dev/assets/hero.png",
+  "workspaceRelativePath": "assets/hero.png",
+  "sha256": "...",
+  "byteSize": 123456,
+  "revisedPrompt": "..."
+}
+```
+
+Az `absolutePath` csak a privát Unix socketen, bearer-hitelesítés után kérhető
+le. A callback nem továbbítja. A Marveen dashboard a saját hitelesített
+`/api/codex-artifacts/:artifactId` proxyján újraellenőrzi a pathot, méretet és
+SHA-256-ot, majd `nosniff` és `no-store` fejlécekkel szolgálja ki.
 
 ## Approval
 
@@ -119,7 +192,8 @@ Authorization: Bearer <bridge-token>
 Idempotency-Key: <runId>:run.completed
 ```
 
-A payload a teljes tartós run rekordot tartalmazza. Marveen a
+A payload a tartós run rekordot és a callbackhez szükséges, abszolút útvonal
+nélküli artifact-metaadatot tartalmazza. Marveen a
 `run.context.belaMessageId` alapján tranzakcióban:
 
 1. ellenőrzi az agent/message kapcsolatot;
@@ -155,4 +229,11 @@ A belső dynamic tool diszpécser fail-closed hibakódjai:
 - `dynamic_tool_run_missing`;
 - `dynamic_tool_identity_mismatch`;
 - `dynamic_tool_unknown`;
-- `mcp_token_missing`.
+- `mcp_token_missing`;
+- `image_artifact_arguments`;
+- `image_artifact_path`;
+- `image_artifact_missing`;
+- `image_artifact_invalid`;
+- `image_path_escape`;
+- `image_artifact_type`;
+- `image_artifact_size`.

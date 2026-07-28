@@ -3,16 +3,20 @@ import { createServer } from 'node:http'
 import { test } from 'node:test'
 import {
   BELA_DYNAMIC_TOOLS,
+  BELA_IMAGE_ARTIFACT_REGISTER_TOOL,
   BELA_TOOL_SPECS,
   callBelaFacadeTool,
 } from '../../src/tools/bela-tools.js'
 
-test('dynamic tool definitions cover the same four tools as MCP', () => {
+test('dynamic tools preserve the four MCP tools and add the run-bound image registrar', () => {
+  const dynamicNames = BELA_DYNAMIC_TOOLS.map((tool) => tool.name)
   assert.deepEqual(
-    BELA_DYNAMIC_TOOLS.map((tool) => tool.name).sort(),
     BELA_TOOL_SPECS.map((tool) => tool.name).sort(),
+    dynamicNames.filter((name) => name !== BELA_IMAGE_ARTIFACT_REGISTER_TOOL).sort(),
   )
-  assert.equal(BELA_DYNAMIC_TOOLS.length, 4)
+  assert.equal(BELA_TOOL_SPECS.length, 4)
+  assert.equal(BELA_DYNAMIC_TOOLS.length, 5)
+  assert.ok(dynamicNames.includes(BELA_IMAGE_ARTIFACT_REGISTER_TOOL))
   assert.ok(BELA_DYNAMIC_TOOLS.every((tool) => tool.deferLoading === false))
 })
 

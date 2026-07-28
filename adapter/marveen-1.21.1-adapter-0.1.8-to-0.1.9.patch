@@ -1,0 +1,362 @@
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=store' '--exclude=agents' marveen-1.21.1-0.1.7/src/__tests__/codex-reasoning-effort.test.ts marveen-1.21.1-0.1.9/src/__tests__/codex-reasoning-effort.test.ts
+--- marveen-1.21.1-0.1.7/src/__tests__/codex-reasoning-effort.test.ts	1970-01-01 09:00:00.000000000 +0900
++++ marveen-1.21.1-0.1.9/src/__tests__/codex-reasoning-effort.test.ts	2026-07-29 00:35:39.119171191 +0900
+@@ -0,0 +1,14 @@
++import { describe, expect, it } from 'vitest'
++import { isCodexReasoningEffort } from '../providers/types.js'
++
++describe('Codex reasoning effort contract', () => {
++  it('accepts only the Bridge-supported effort levels', () => {
++    expect(isCodexReasoningEffort('medium')).toBe(true)
++    expect(isCodexReasoningEffort('high')).toBe(true)
++    expect(isCodexReasoningEffort('xhigh')).toBe(true)
++    expect(isCodexReasoningEffort('low')).toBe(false)
++    expect(isCodexReasoningEffort('max')).toBe(false)
++    expect(isCodexReasoningEffort('ultra')).toBe(false)
++    expect(isCodexReasoningEffort(undefined)).toBe(false)
++  })
++})
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=store' '--exclude=agents' marveen-1.21.1-0.1.7/src/providers/codex-provider.ts marveen-1.21.1-0.1.9/src/providers/codex-provider.ts
+--- marveen-1.21.1-0.1.7/src/providers/codex-provider.ts	2026-07-28 15:40:20.306548195 +0900
++++ marveen-1.21.1-0.1.9/src/providers/codex-provider.ts	2026-07-29 00:34:42.991172408 +0900
+@@ -32,6 +32,7 @@
+     {
+       displayName: agentId,
+       model: config.model,
++      reasoningEffort: config.reasoningEffort,
+       workspacePath: agentDir(agentId),
+       workspaceMode: 'directory',
+       sandboxMode: config.sandboxMode,
+@@ -55,6 +56,9 @@
+     desiredState: String(result.data.desiredState ?? 'running'),
+     actualState: String(result.data.actualState ?? 'idle'),
+     model: String(result.data.model ?? readAgentCodexProviderConfig(agentId).model),
++    reasoningEffort: String(
++      result.data.reasoningEffort ?? readAgentCodexProviderConfig(agentId).reasoningEffort,
++    ) as ProviderStatus['reasoningEffort'],
+   }
+   statusCache.set(agentId, status)
+   return status
+@@ -72,6 +76,9 @@
+     desiredState: String(result.data.desiredState ?? 'stopped'),
+     actualState: String(result.data.actualState ?? 'offline'),
+     model: String(result.data.model ?? readAgentCodexProviderConfig(agentId).model),
++    reasoningEffort: String(
++      result.data.reasoningEffort ?? readAgentCodexProviderConfig(agentId).reasoningEffort,
++    ) as ProviderStatus['reasoningEffort'],
+   }
+   statusCache.set(agentId, status)
+   return status
+@@ -96,6 +103,9 @@
+     desiredState: String(result.data.desiredState ?? 'running'),
+     actualState: String(result.data.actualState ?? 'idle'),
+     model: String(result.data.model ?? readAgentCodexProviderConfig(agentId).model),
++    reasoningEffort: String(
++      result.data.reasoningEffort ?? readAgentCodexProviderConfig(agentId).reasoningEffort,
++    ) as ProviderStatus['reasoningEffort'],
+   }
+   statusCache.set(agentId, status)
+   return status
+@@ -107,6 +117,7 @@
+       desiredState?: string
+       actualState?: string
+       model?: string
++      reasoningEffort?: ProviderStatus['reasoningEffort']
+     }>('GET', `/v1/agents/${encodeURIComponent(agentId)}`)
+     const status: ProviderStatus = {
+       provider: 'codex',
+@@ -115,6 +126,7 @@
+       desiredState: result.data.desiredState,
+       actualState: result.data.actualState,
+       model: result.data.model,
++      reasoningEffort: result.data.reasoningEffort,
+     }
+     statusCache.set(agentId, status)
+     return status
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=store' '--exclude=agents' marveen-1.21.1-0.1.7/src/providers/types.ts marveen-1.21.1-0.1.9/src/providers/types.ts
+--- marveen-1.21.1-0.1.7/src/providers/types.ts	2026-07-28 15:40:20.306548195 +0900
++++ marveen-1.21.1-0.1.9/src/providers/types.ts	2026-07-29 00:35:38.811171198 +0900
+@@ -1,7 +1,13 @@
+ export type AgentProvider = 'claude' | 'codex'
++export type CodexReasoningEffort = 'medium' | 'high' | 'xhigh'
++
++export function isCodexReasoningEffort(value: unknown): value is CodexReasoningEffort {
++  return value === 'medium' || value === 'high' || value === 'xhigh'
++}
+ 
+ export interface CodexProviderConfig {
+   model: string
++  reasoningEffort: CodexReasoningEffort
+   sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access'
+   approvalPolicy: 'never' | 'bela'
+   networkEnabled: boolean
+@@ -26,5 +32,6 @@
+   desiredState?: string
+   actualState?: string
+   model?: string
++  reasoningEffort?: CodexReasoningEffort
+   error?: string
+ }
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=store' '--exclude=agents' marveen-1.21.1-0.1.7/src/web/agent-config.ts marveen-1.21.1-0.1.9/src/web/agent-config.ts
+--- marveen-1.21.1-0.1.7/src/web/agent-config.ts	2026-07-28 15:40:20.306548195 +0900
++++ marveen-1.21.1-0.1.9/src/web/agent-config.ts	2026-07-29 00:35:38.887171196 +0900
+@@ -4,7 +4,11 @@
+ import { PROJECT_ROOT, MAIN_AGENT_ID } from '../config.js'
+ import { atomicWriteFileSync } from './atomic-write.js'
+ import { safeJoin } from './sanitize.js'
+-import type { AgentProvider, CodexProviderConfig } from '../providers/types.js'
++import {
++  isCodexReasoningEffort,
++  type AgentProvider,
++  type CodexProviderConfig,
++} from '../providers/types.js'
+ 
+ export const AGENTS_BASE_DIR = join(PROJECT_ROOT, 'agents')
+ 
+@@ -117,10 +121,14 @@
+       && CODEX_APPROVALS.has(raw.approvalPolicy as CodexProviderConfig['approvalPolicy'])
+       ? raw.approvalPolicy as CodexProviderConfig['approvalPolicy']
+       : 'bela'
++    const reasoningEffort = isCodexReasoningEffort(raw.reasoningEffort)
++      ? raw.reasoningEffort
++      : 'medium'
+     return {
+       model: typeof raw.model === 'string' && raw.model.trim()
+         ? raw.model.trim()
+         : 'gpt-5.6-terra',
++      reasoningEffort,
+       sandboxMode: sandbox,
+       approvalPolicy: approval,
+       networkEnabled: raw.networkEnabled === true,
+@@ -128,6 +136,7 @@
+   } catch {
+     return {
+       model: 'gpt-5.6-terra',
++      reasoningEffort: 'medium',
+       sandboxMode: 'workspace-write',
+       approvalPolicy: 'bela',
+       networkEnabled: false,
+@@ -145,6 +154,9 @@
+   const current = readAgentCodexProviderConfig(name)
+   const next: CodexProviderConfig = {
+     model: typeof value.model === 'string' && value.model.trim() ? value.model.trim() : current.model,
++    reasoningEffort: isCodexReasoningEffort(value.reasoningEffort)
++      ? value.reasoningEffort
++      : current.reasoningEffort,
+     sandboxMode: value.sandboxMode && CODEX_SANDBOXES.has(value.sandboxMode)
+       ? value.sandboxMode
+       : current.sandboxMode,
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=store' '--exclude=agents' marveen-1.21.1-0.1.7/src/web/routes/agents.ts marveen-1.21.1-0.1.9/src/web/routes/agents.ts
+--- marveen-1.21.1-0.1.7/src/web/routes/agents.ts	2026-07-28 15:40:20.306548195 +0900
++++ marveen-1.21.1-0.1.9/src/web/routes/agents.ts	2026-07-29 00:35:38.963171194 +0900
+@@ -116,7 +116,11 @@
+ import { suggestForAgent, type AgentSignals } from '../model-suggest.js'
+ import { getTokenSummary } from '../token-usage.js'
+ import { listScheduledTasks } from '../scheduled-tasks-io.js'
+-import type { AgentProvider, CodexProviderConfig } from '../../providers/types.js'
++import {
++  isCodexReasoningEffort,
++  type AgentProvider,
++  type CodexProviderConfig,
++} from '../../providers/types.js'
+ import { codexBridgeClient } from '../../providers/codex-bridge-client.js'
+ import {
+   getCachedCodexAgentStatus,
+@@ -694,6 +698,13 @@
+     const rawName = typeof data.name === 'string' ? data.name.trim() : ''
+     const name = sanitizeAgentName(rawName)
+     const provider: AgentProvider = rawProvider === 'codex' ? 'codex' : 'claude'
++    if (
++      rawProviderConfig?.reasoningEffort !== undefined
++      && !isCodexReasoningEffort(rawProviderConfig.reasoningEffort)
++    ) {
++      json(res, { error: 'reasoningEffort must be medium, high, or xhigh' }, 400)
++      return true
++    }
+     const model = provider === 'codex'
+       ? rawModel?.trim() || rawProviderConfig?.model?.trim() || 'gpt-5.6-terra'
+       : resolveModelId(rawModel || DEFAULT_MODEL)
+@@ -1660,6 +1671,13 @@
+       json(res, { error: 'provider must be claude or codex' }, 400)
+       return true
+     }
++    if (
++      data.providerConfig?.reasoningEffort !== undefined
++      && !isCodexReasoningEffort(data.providerConfig.reasoningEffort)
++    ) {
++      json(res, { error: 'reasoningEffort must be medium, high, or xhigh' }, 400)
++      return true
++    }
+     const previousProvider = readAgentProvider(name)
+     if (data.provider !== undefined && data.provider !== previousProvider) {
+       // Stop the old runtime before persisting the provider switch. Otherwise
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=store' '--exclude=agents' marveen-1.21.1-0.1.7/web/app.js marveen-1.21.1-0.1.9/web/app.js
+--- marveen-1.21.1-0.1.7/web/app.js	2026-07-28 15:40:20.310548195 +0900
++++ marveen-1.21.1-0.1.9/web/app.js	2026-07-29 00:35:39.047171193 +0900
+@@ -2041,6 +2041,7 @@
+ const agentDesc = document.getElementById('agentDesc')
+ const agentModel = document.getElementById('agentModel')
+ const agentProvider = document.getElementById('agentProvider')
++const agentReasoningEffort = document.getElementById('agentReasoningEffort')
+ const toast = document.getElementById('toast')
+ 
+ const AVATARS = [
+@@ -2164,6 +2165,7 @@
+   agentDesc.value = ''
+   agentModel.value = 'inherit'
+   agentProvider.value = 'claude'
++  agentReasoningEffort.value = 'high'
+   loadAvailableModels()
+   selectedAvatar = null
+   selectedAvatarFile = null
+@@ -2191,6 +2193,7 @@
+ 
+ function updateWizardProviderUI() {
+   const codex = agentProvider.value === 'codex'
++  document.getElementById('agentReasoningEffortGroup').hidden = !codex
+   const identityLabel = document.getElementById('wizardClaudeMdLabel')
+   const soulLabel = document.getElementById('wizardSoulMdLabel')
+   const hint = document.getElementById('wizardGenHint')
+@@ -2245,6 +2248,7 @@
+         providerConfig: provider === 'codex'
+           ? {
+               model: agentModel.value,
++              reasoningEffort: agentReasoningEffort.value,
+               sandboxMode: 'workspace-write',
+               approvalPolicy: 'bela',
+               networkEnabled: false,
+@@ -2519,6 +2523,7 @@
+   document.getElementById('agentDetailName').textContent = displayName
+   document.getElementById('agentDetailDesc').textContent = m.description || ''
+   document.getElementById('agentDetailModel').textContent = m.model || '-'
++  document.getElementById('agentDetailReasoningEffortItem').hidden = true
+   document.getElementById('agentDetailChStatus').innerHTML = `<span class="tg-status"><span class="tg-dot connected"></span>${t('agents.channel.connected')}</span>`
+   // Populate the Skills tab for the main agent too: the endpoint returns the
+   // global ~/.claude/skills under its real id (agentId), which every agent
+@@ -2812,6 +2817,12 @@
+   document.getElementById('agentDetailDesc').textContent = currentAgent.description || ''
+   document.getElementById('agentDetailModel').textContent = currentAgent.activeModel || currentAgent.model || 'inherit'
+   document.getElementById('agentDetailModelRestarting').hidden = true
++  const effortItem = document.getElementById('agentDetailReasoningEffortItem')
++  const isCodex = currentAgent.provider === 'codex'
++  effortItem.hidden = !isCodex
++  document.getElementById('agentDetailReasoningEffort').textContent = isCodex
++    ? currentAgent.providerConfig?.reasoningEffort || 'medium'
++    : '-'
+ 
+   const chConnected = agentIsConnected(currentAgent)
+   document.getElementById('agentDetailChStatus').innerHTML = `<span class="tg-status"><span class="tg-dot ${chConnected ? 'connected' : 'disconnected'}"></span>${chConnected ? t('agents.channel.connected') : t('agents.channel.disconnected')}</span>`
+@@ -2819,11 +2830,21 @@
+   // Settings tab - load Ollama + DeepSeek models then set value
+   loadAvailableModels()
+   const providerSelect = document.getElementById('editAgentProvider')
++  const effortGroup = document.getElementById('editAgentReasoningEffortGroup')
++  const effortSelect = document.getElementById('editAgentReasoningEffort')
+   providerSelect.value = currentAgent.provider || 'claude'
++  effortGroup.hidden = providerSelect.value !== 'codex'
++  effortSelect.value = currentAgent.providerConfig?.reasoningEffort || 'medium'
+   providerSelect.onchange = () => {
+     const modelSelect = document.getElementById('editAgentModel')
+-    if (providerSelect.value === 'codex') modelSelect.value = 'gpt-5.6-terra'
+-    else if (modelSelect.value.startsWith('gpt-')) modelSelect.value = 'claude-opus-4-8[1m]'
++    const codex = providerSelect.value === 'codex'
++    effortGroup.hidden = !codex
++    if (codex) {
++      modelSelect.value = 'gpt-5.6-terra'
++      if (!effortSelect.value) effortSelect.value = 'high'
++    } else if (modelSelect.value.startsWith('gpt-')) {
++      modelSelect.value = 'claude-opus-4-8[1m]'
++    }
+   }
+   loadOllamaModels().then(() => {
+     document.getElementById('editAgentModel').value = currentAgent.activeModel || currentAgent.model || 'claude-opus-4-8[1m]'
+@@ -3343,6 +3364,7 @@
+   if (!currentAgent || currentAgent.role === 'main') return
+   const newModel = document.getElementById('editAgentModel').value
+   const newProvider = document.getElementById('editAgentProvider').value
++  const newReasoningEffort = document.getElementById('editAgentReasoningEffort').value
+   const name = currentAgent.name
+   try {
+     const res = await fetch(`/api/agents/${encodeURIComponent(name)}`, {
+@@ -3354,6 +3376,7 @@
+         providerConfig: newProvider === 'codex'
+           ? {
+               model: newModel,
++              reasoningEffort: newReasoningEffort,
+               sandboxMode: currentAgent.providerConfig?.sandboxMode || 'workspace-write',
+               approvalPolicy: currentAgent.providerConfig?.approvalPolicy || 'bela',
+               networkEnabled: currentAgent.providerConfig?.networkEnabled === true,
+@@ -3364,6 +3387,13 @@
+     if (!res.ok) throw new Error()
+     currentAgent.model = newModel
+     currentAgent.provider = newProvider
++    currentAgent.providerConfig = newProvider === 'codex'
++      ? {
++          ...(currentAgent.providerConfig || {}),
++          model: newModel,
++          reasoningEffort: newReasoningEffort,
++        }
++      : null
+     const triggeredAt = Math.floor(Date.now() / 1000)
+     document.getElementById('agentDetailModelRestarting').hidden = false
+     document.getElementById('processLabel').textContent = t('agents.process_label')
+@@ -3387,6 +3417,9 @@
+         : 'process-dot'
+       document.getElementById('processLabel').textContent = status?.actualState || 'Codex Bridge'
+       document.getElementById('agentDetailModel').textContent = status?.model || newModel
++      document.getElementById('agentDetailReasoningEffortItem').hidden = false
++      document.getElementById('agentDetailReasoningEffort').textContent =
++        status?.reasoningEffort || newReasoningEffort
+       showToast('Codex agent újraindítva')
+       loadAgents()
+       return
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=store' '--exclude=agents' marveen-1.21.1-0.1.7/web/index.html marveen-1.21.1-0.1.9/web/index.html
+--- marveen-1.21.1-0.1.7/web/index.html	2026-07-28 15:40:20.310548195 +0900
++++ marveen-1.21.1-0.1.9/web/index.html	2026-07-29 00:34:43.079172406 +0900
+@@ -1924,6 +1924,17 @@
+               </optgroup>
+             </select>
+           </div>
++          <div class="form-group" id="agentReasoningEffortGroup" hidden>
++            <label for="agentReasoningEffort">Gondolkodási szint</label>
++            <select id="agentReasoningEffort">
++              <option value="medium">Medium – gyorsabb, egyszerű feladatokhoz</option>
++              <option value="high" selected>High – ajánlott fejlesztési feladatokhoz</option>
++              <option value="xhigh">XHigh – a legnehezebb feladatokhoz, lassabb</option>
++            </select>
++            <small style="display:block;margin-top:6px;color:var(--text-muted);font-size:12px">
++              Csak Codex agentnél érvényes. Módosítása új Codex threadet indít.
++            </small>
++          </div>
+           <div class="form-group">
+             <label for="agentProfile" data-i18n="agents.wizard.profile_label">Biztonsági profil</label>
+             <select id="agentProfile"></select>
+@@ -2027,6 +2038,10 @@
+               <span class="meta-label" data-i18n="agents.detail.channel_label">Csatorna</span>
+               <span class="meta-value" id="agentDetailChStatus"></span>
+             </div>
++            <div class="agent-overview-item" id="agentDetailReasoningEffortItem" hidden>
++              <span class="meta-label">Gondolkodási szint</span>
++              <span class="meta-value" id="agentDetailReasoningEffort">-</span>
++            </div>
+             <div class="agent-overview-item">
+               <span class="meta-label" data-i18n="agents.detail.skills_label">Skillek</span>
+               <span class="meta-value" id="agentDetailSkillCount">0</span>
+@@ -2147,6 +2162,17 @@
+               Bekapcsolva az ágens a saját, kezdetben üres fájl-memóriájával indul, és nem látja a közös MEMORY.md-t. A megosztott SQLite-emlékek és a CLAUDE.md továbbra is elérnek hozzá. Több-felhasználós telepítésen ajánlott; egy-felhasználós telepítésen hagyd kikapcsolva. A következő újraindításkor lép életbe.
+             </small>
+           </div>
++          <div class="form-group" id="editAgentReasoningEffortGroup" hidden>
++            <label for="editAgentReasoningEffort">Gondolkodási szint</label>
++            <select id="editAgentReasoningEffort">
++              <option value="medium">Medium – gyorsabb</option>
++              <option value="high">High – ajánlott</option>
++              <option value="xhigh">XHigh – legerősebb, lassabb</option>
++            </select>
++            <small style="display:block;margin-top:6px;color:var(--text-muted);font-size:12px">
++              Mentéskor az előző thread lezárul, a következő feladat új threadben indul.
++            </small>
++          </div>
+           <div class="form-group" id="authModeGroup">
+             <label data-i18n="agents.settings.auth_mode_label">Hitelesítési mód</label>
+             <div class="auth-mode-cards">

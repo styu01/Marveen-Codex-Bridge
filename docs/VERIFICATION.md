@@ -1,4 +1,4 @@
-# Béla Codex Bridge 0.1.8 – fejlesztési és ellenőrzési jegyzőkönyv
+# Béla Codex Bridge 0.2.1 – fejlesztési és ellenőrzési jegyzőkönyv
 
 ## Rögzített környezet
 
@@ -11,6 +11,8 @@
 | Codex CLI | 0.145.0 |
 | Auth | ChatGPT-előfizetés |
 | Elfogadott modell | `gpt-5.6-terra` |
+| Elfogadott effort | `medium`, `high`, `xhigh` |
+| Képgeneráló modell | `gpt-image-2`, Codex provider capability |
 | Elutasított modellek | `gpt-5.6-sol`, `gpt-5.6` |
 
 ## Felhasználó gépén már bizonyított preflight
@@ -124,6 +126,87 @@
   adatbázis 003 migrációja idempotens, a visszaállított 0.1.6 adaptert a
   telepítő szabályosan frissíti.
 
+## A 0.1.9 reasoning-effort bővítés ellenőrzése
+
+- Közvetlen `codex exec` preflight ChatGPT-auth mellett:
+  `gpt-5.6-terra/high` PASS és `gpt-5.6-terra/xhigh` PASS.
+- Az effort agentenként kerül a Bridge adatbázisába és a Marveen
+  `providerConfig` objektumába.
+- A 004 migráció a meglévő agenteket és threadeket `medium` értékkel őrzi meg.
+- A runtime az agent effektív értékét adja át
+  `model_reasoning_effort` konfigurációként.
+- Az effort bekerül a generált `.codex/config.toml`, `runtime.json`, agent API
+  és thread API nézetbe.
+- `medium`, `high`, `xhigh` elfogadott; `max` és más értékek HTTP 400 hibát
+  kapnak.
+- Effortváltáskor a `configRevision` nő, a következő run új threadet kap.
+- Aktív run/approval közben effortváltás HTTP 409 `agent_busy`.
+- Bridge Node 22.23.1 suite: **23/23 PASS**.
+- Marveen céltesztek: **8 fájl, 62/62 PASS**.
+- A 0.1.8→0.1.9 adapter patch dry-runja, tényleges alkalmazása, typecheckje,
+  syntax-checkje, tesztje és production buildje: PASS.
+
+## A 0.2.0 képgenerálási bővítés ellenőrzése
+
+- A Codex 0.145.0 generált sémáiban ellenőrizve:
+  `modelProvider/capabilities/read`,
+  `ModelProviderCapabilitiesReadResponse.imageGeneration` és az
+  `imageGeneration` thread item `id/result/status/revisedPrompt/savedPath`
+  mezői.
+- A Bridge induláskor lekéri és a `/v1/meta` válaszban publikálja a provider
+  capability-t.
+- A fake App Server valódi sémájú image eventet küld és egy valódi, magic-byte
+  alapján érvényes PNG-t ment a workspace-be.
+- Workspace-en belüli kép regisztrálása, SHA-256, run API, artifact API,
+  event és callback-metaadat: integrációs PASS.
+- `/tmp` alá mutató hamis `savedPath`: fail-closed
+  `image_artifact_invalid`, artifact nélkül.
+- Symlink-, path traversal-, fájltípus- és 50 MiB méretkorlát a runtime
+  validatorban.
+- Bridge Node 22.23.1 suite: **25/25 PASS**.
+- Marveen typecheck, syntax-check és céltesztek: **8 fájl, 63/63 PASS**.
+- A 0.1.9→0.2.0 adapter patch dry-runja, alkalmazása, typecheckje,
+  céltesztje és production buildje: PASS.
+- A dashboard artifact route a Bridge metaadat után újraellenőrzi a canonical
+  pathot, agent providert, fájlméretet és SHA-256-ot.
+- A böngésző a bearerrel végzett fetchből Blob URL-t készít; közvetlen
+  host-path vagy publikus fájlroute nincs.
+
+## A 0.2.1 staging→végleges artifact javítás ellenőrzése
+
+A valós 0.2.0 éles teszt bizonyította, hogy a beépített imagegen először
+workspace-en kívüli provider-staging PNG-t adott, majd a Codex azt a kért
+workspace-fájlba másolta és 1024×1024-re méretezte. A végleges fájl SHA-256-a
+helyes volt, de a Bridge a korábbi staging esemény miatt tévesen
+`image_artifact_invalid` állapotot adott. A 0.2.1 ezt az életciklust kezeli.
+
+Ellenőrzött szerződés:
+
+- dynamic tool contract revision 2;
+- a négy MCP façade tool változatlan;
+- külön, ötödik `bela_image_artifact_register` csak a dynamic toolsetben;
+- aktív run/thread/turn/call/namespace identitás fail-closed ellenőrzése;
+- pontosan egy `path` argumentum, kizárólag workspace-relatív alakban;
+- workspace-en kívüli staging esemény nem artifact és nem azonnali hiba;
+- staging után workspace-be írt végleges PNG dinamikus regisztrációja: PASS;
+- regisztrált artifact nélkül befejezett image run:
+  `image_artifact_missing`, artifact nélkül;
+- canonical path, path traversal, symlink, normál fájl, magic-byte MIME,
+  byte-limit és SHA-256 ellenőrzés;
+- ugyanazon run+canonical végleges útvonal újraregisztrációja idempotens;
+- kép nélküli normál runok viselkedése változatlan;
+- egyszeri revision 1→2 threadcsere és utána tartós revision 2 resume;
+- Bridge Node 22.23.1 build és suite: **27/27 PASS**;
+- Marveen Node 24 typecheck és syntax-check: PASS;
+- Marveen céltesztek: **8 fájl, 63/63 PASS**;
+- Marveen production build: PASS;
+- pristine, 0.1.6, 0.1.8, 0.1.9 és már aktuális adapterállapotok
+  kompatibilitási dry-runja: PASS.
+
+A 0.2.1 Bridge-javításhoz nem szükséges új Marveen patch vagy adatbázis-
+migráció. A meglévő `bridge_artifacts` tábla és a revision 4 Marveen
+artifact/callback/dashboard adapter változatlanul használható.
+
 ## Marveen 1.21.1 adapter ellenőrzése
 
 A vizsgálat és a patch a feltöltött
@@ -173,7 +256,7 @@ hagyhat félkész új Bridge release-t maga után.
 | Lifecycle | provider-alapú start/stop/restart/fresh-thread, tmux nélkül |
 | Monitorok | Codex-agentek kizárva a Claude/tmux auto-restart, model-fallback és channel-monitor útvonalakból |
 
-A 0.1.8 telepítő csak a ténylegesen validált 1.21.1 verziót fogadja el.
+A 0.2.1 telepítő csak a ténylegesen validált 1.21.1 verziót fogadja el.
 A korábbi 1.23.2 artefakt megmaradt, de automatikusan nem alkalmazható.
 
 ## Hivatalos Codex-szerződés ellenőrzése

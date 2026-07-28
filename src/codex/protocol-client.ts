@@ -82,7 +82,7 @@ export class CodexProtocolClient extends EventEmitter {
       clientInfo: {
         name: 'bela_codex_bridge',
         title: 'Béla Codex Bridge',
-        version: '0.1.8',
+        version: '0.2.1',
       },
       capabilities: {
         experimentalApi: true,

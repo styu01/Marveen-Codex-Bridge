@@ -29,11 +29,12 @@ VERSION="$("${MARVEEN_NODE}" -p \
   "${MARVEEN_ROOT}/package.json")"
 
 [[ "${VERSION}" == "1.21.1" ]] \
-  || fail "Béla Codex Bridge 0.1.8 supports the validated Marveen 1.21.1 adapter only; found ${VERSION}."
+  || fail "Béla Codex Bridge 0.2.1 supports the validated Marveen 1.21.1 adapter only; found ${VERSION}."
 
 TARGET_TESTS=(
   src/__tests__/codex-agent-identity.test.ts
   src/__tests__/codex-provider-callback-dedupe.test.ts
+  src/__tests__/codex-reasoning-effort.test.ts
   src/__tests__/provider-service-auth.test.ts
   src/__tests__/codex-message-router.test.ts
   src/__tests__/message-router-tick-cap.test.ts
@@ -58,11 +59,30 @@ then
   SOURCE_IDENTITY_CURRENT=1
 fi
 
-SOURCE_CURRENT=0
+SOURCE_018_CURRENT=0
 if [[ "${SOURCE_IDENTITY_CURRENT}" -eq 1 ]] \
-  && rg -q "CODEX_CALLBACK_ADAPTER_REVISION = 2" \
+  && rg -q "CODEX_CALLBACK_ADAPTER_REVISION = (2|3)" \
     "${MARVEEN_ROOT}/src/web/routes/provider-callbacks.ts" 2>/dev/null \
   && [[ -f "${MARVEEN_ROOT}/src/__tests__/codex-provider-callback-dedupe.test.ts" ]]
+then
+  SOURCE_018_CURRENT=1
+fi
+
+SOURCE_019_CURRENT=0
+if [[ "${SOURCE_018_CURRENT}" -eq 1 ]] \
+  && rg -q "reasoningEffort" "${MARVEEN_ROOT}/src/providers/types.ts" 2>/dev/null \
+  && rg -q "agentReasoningEffort" "${MARVEEN_ROOT}/web/app.js" 2>/dev/null \
+  && [[ -f "${MARVEEN_ROOT}/src/__tests__/codex-reasoning-effort.test.ts" ]]
+then
+  SOURCE_019_CURRENT=1
+fi
+
+SOURCE_CURRENT=0
+if [[ "${SOURCE_019_CURRENT}" -eq 1 ]] \
+  && rg -q "CODEX_CALLBACK_ADAPTER_REVISION = 3" \
+    "${MARVEEN_ROOT}/src/web/routes/provider-callbacks.ts" 2>/dev/null \
+  && [[ -f "${MARVEEN_ROOT}/src/web/routes/codex-artifacts.ts" ]] \
+  && rg -q "hydrateCodexImages" "${MARVEEN_ROOT}/web/app.js" 2>/dev/null
 then
   SOURCE_CURRENT=1
 fi
@@ -74,8 +94,12 @@ if [[ -f "${MARVEEN_ROOT}/dist/web/agent-scaffold.js" ]] \
   && [[ -f "${MARVEEN_ROOT}/dist/providers/codex-provider.js" ]] \
   && rg -q "readAgentProvider" \
     "${MARVEEN_ROOT}/dist/web/message-router.js" 2>/dev/null \
-  && rg -q "CODEX_CALLBACK_ADAPTER_REVISION = 2" \
-    "${MARVEEN_ROOT}/dist/web/routes/provider-callbacks.js" 2>/dev/null
+  && rg -q "CODEX_CALLBACK_ADAPTER_REVISION = 3" \
+    "${MARVEEN_ROOT}/dist/web/routes/provider-callbacks.js" 2>/dev/null \
+  && rg -q "reasoningEffort" \
+    "${MARVEEN_ROOT}/dist/providers/codex-provider.js" 2>/dev/null \
+  && [[ -f "${MARVEEN_ROOT}/dist/web/routes/codex-artifacts.js" ]] \
+  && rg -q "hydrateCodexImages" "${MARVEEN_ROOT}/web/app.js" 2>/dev/null
 then
   DIST_CURRENT=1
 fi
@@ -92,15 +116,32 @@ fi
 if [[ "${SOURCE_CURRENT}" -eq 1 ]]; then
   ADAPTER_ACTION="rebuild-current-dist"
   PATCH_FILE=""
-  MANIFEST="${SOURCE_ROOT}/adapter/compatibility-1.21.1-adapter-0.1.7.sha256"
+  MANIFEST="${SOURCE_ROOT}/adapter/compatibility-1.21.1-adapter-0.2.0.sha256"
   NEW_FILES=()
+elif [[ "${SOURCE_019_CURRENT}" -eq 1 ]]; then
+  ADAPTER_ACTION="upgrade-0.1.9-to-current"
+  PATCH_FILE="${SOURCE_ROOT}/adapter/marveen-1.21.1-adapter-0.1.9-to-0.2.0.patch"
+  MANIFEST="${SOURCE_ROOT}/adapter/compatibility-1.21.1-adapter-0.1.9.sha256"
+  NEW_FILES=(src/web/routes/codex-artifacts.ts)
+elif [[ "${SOURCE_018_CURRENT}" -eq 1 ]]; then
+  ADAPTER_ACTION="upgrade-0.1.8-to-current"
+  PATCH_FILE="${SOURCE_ROOT}/adapter/marveen-1.21.1-adapter-0.1.8-to-0.2.0.patch"
+  MANIFEST="${SOURCE_ROOT}/adapter/compatibility-1.21.1-adapter-0.1.8.sha256"
+  NEW_FILES=(
+    src/__tests__/codex-reasoning-effort.test.ts
+    src/web/routes/codex-artifacts.ts
+  )
 elif [[ "${SOURCE_IDENTITY_CURRENT}" -eq 1 ]]; then
-  ADAPTER_ACTION="upgrade-0.1.6-to-0.1.7"
-  PATCH_FILE="${SOURCE_ROOT}/adapter/marveen-1.21.1-adapter-0.1.6-to-0.1.7.patch"
+  ADAPTER_ACTION="upgrade-0.1.6-to-current"
+  PATCH_FILE="${SOURCE_ROOT}/adapter/marveen-1.21.1-adapter-0.1.6-to-0.2.0.patch"
   MANIFEST="${SOURCE_ROOT}/adapter/compatibility-1.21.1-adapter-0.1.6.sha256"
-  NEW_FILES=(src/__tests__/codex-provider-callback-dedupe.test.ts)
+  NEW_FILES=(
+    src/__tests__/codex-provider-callback-dedupe.test.ts
+    src/__tests__/codex-reasoning-effort.test.ts
+    src/web/routes/codex-artifacts.ts
+  )
 elif [[ "${HAS_ADAPTER}" -eq 1 ]]; then
-  fail "A legacy Codex adapter is installed. Upgrade it to Bridge 0.1.6 before installing 0.1.7."
+  fail "A legacy, unsupported Codex adapter is installed. Restore a validated 0.1.6, 0.1.8, or 0.1.9 adapter baseline before installing 0.2.1."
 else
   ADAPTER_ACTION="install-current"
   PATCH_FILE="${SOURCE_ROOT}/adapter/marveen-1.21.1.patch"
@@ -113,10 +154,12 @@ else
     src/web/routes/provider-callbacks.ts
     src/web/routes/codex-facade.ts
     src/web/routes/codex-approvals.ts
+    src/web/routes/codex-artifacts.ts
     src/__tests__/provider-service-auth.test.ts
     src/__tests__/codex-message-router.test.ts
     src/__tests__/codex-agent-identity.test.ts
     src/__tests__/codex-provider-callback-dedupe.test.ts
+    src/__tests__/codex-reasoning-effort.test.ts
   )
 fi
 
@@ -232,9 +275,22 @@ validate_compiled_dist() {
     echo "Compiled Codex provider is missing from dist" >&2
     return 1
   }
-  rg -q "CODEX_CALLBACK_ADAPTER_REVISION = 2" \
+  rg -q "CODEX_CALLBACK_ADAPTER_REVISION = 3" \
     "${MARVEEN_ROOT}/dist/web/routes/provider-callbacks.js" || {
     echo "Compiled Codex callback adapter revision 2 is missing from dist" >&2
+    return 1
+  }
+  rg -q "reasoningEffort" \
+    "${MARVEEN_ROOT}/dist/providers/codex-provider.js" || {
+    echo "Compiled Codex reasoning effort adapter is missing from dist" >&2
+    return 1
+  }
+  [[ -f "${MARVEEN_ROOT}/dist/web/routes/codex-artifacts.js" ]] || {
+    echo "Compiled Codex artifact proxy is missing from dist" >&2
+    return 1
+  }
+  rg -q "hydrateCodexImages" "${MARVEEN_ROOT}/web/app.js" || {
+    echo "Codex image preview is missing from the dashboard" >&2
     return 1
   }
 }

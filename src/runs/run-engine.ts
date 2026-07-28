@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import type { BridgeConfig } from '../config.js'
 import type { RpcNotification, RpcRequest } from '../codex/protocol-client.js'
 import { normalizeNotification, notificationIdentity, turnStatus } from '../codex/event-normalizer.js'
@@ -11,6 +12,7 @@ import type { AgentRecord, RunRecord } from '../types.js'
 import {
   BELA_DYNAMIC_TOOL_CONTRACT_REVISION,
   BELA_DYNAMIC_TOOLS,
+  BELA_IMAGE_ARTIFACT_REGISTER_TOOL,
   BELA_TOOL_SPECS,
   callBelaFacadeTool,
   isBelaToolName,
@@ -22,6 +24,9 @@ type ActiveRun = {
   threadId: string
   turnId: string | null
   finalTexts: string[]
+  imageItemsSeen: number
+  latestImagePrompt: string | null
+  artifactErrors: string[]
   usage: Record<string, unknown> | null
   resolveCompletion: (notification: RpcNotification) => void
   rejectCompletion: (error: Error) => void
@@ -46,6 +51,42 @@ function object(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {}
+}
+
+function imageArtifactPath(args: Record<string, unknown>): string {
+  const keys = Object.keys(args)
+  if (keys.length !== 1 || keys[0] !== 'path') {
+    throw new BridgeError(
+      'image_artifact_arguments',
+      'bela_image_artifact_register accepts exactly one argument: path',
+      400,
+    )
+  }
+  const value = args.path
+  if (
+    typeof value !== 'string'
+    || value.length < 1
+    || value.length > 4096
+    || value.includes('\0')
+    || isAbsolute(value)
+  ) {
+    throw new BridgeError(
+      'image_artifact_path',
+      'Image artifact path must be a non-empty workspace-relative path',
+      400,
+    )
+  }
+  return value
+}
+
+function pathIsLexicallyInside(root: string, candidate: string): boolean {
+  if (!isAbsolute(candidate)) return false
+  const rel = relative(resolve(root), resolve(candidate))
+  return rel === '' || (
+    rel !== '..'
+    && !rel.startsWith(`..${sep}`)
+    && !isAbsolute(rel)
+  )
 }
 
 export class RunEngine extends EventEmitter {
@@ -106,7 +147,7 @@ export class RunEngine extends EventEmitter {
       )
     }
     const name = typeof params.tool === 'string' ? params.tool : ''
-    if (!isBelaToolName(name)) {
+    if (name !== BELA_IMAGE_ARTIFACT_REGISTER_TOOL && !isBelaToolName(name)) {
       throw new BridgeError('dynamic_tool_unknown', `Unsupported dynamic tool: ${name || '(missing)'}`, 400)
     }
     const args = object(params.arguments)
@@ -115,13 +156,58 @@ export class RunEngine extends EventEmitter {
       tool: name,
     })
     try {
-      const value = await callBelaFacadeTool({
-        name,
-        args,
-        origin: this.config.callbacks.baseUrl,
-        token: this.runtime.readMcpToken(run.agentId),
-        timeoutMs: this.config.callbacks.timeoutMs,
-      })
+      let value: unknown
+      if (name === BELA_IMAGE_ARTIFACT_REGISTER_TOOL) {
+        active.imageItemsSeen += 1
+        const relativePath = imageArtifactPath(args)
+        const agent = this.requireAgent(run.agentId)
+        const inspected = this.runtime.inspectGeneratedImage(
+          agent,
+          resolve(agent.workspacePath, relativePath),
+        )
+        const artifact = this.repos.artifacts.registerFinal({
+          runId,
+          agentId: run.agentId,
+          providerItemId: `dynamic:${String(params.callId)}`,
+          kind: 'image',
+          status: 'ready',
+          ...inspected,
+          revisedPrompt: active.latestImagePrompt,
+        })
+        this.repos.events.append(runId, 'image_artifact_ready', {
+          artifactId: artifact.artifactId,
+          providerItemId: artifact.providerItemId,
+          source: 'dynamic-tool',
+          mimeType: artifact.mimeType,
+          workspaceRelativePath: artifact.workspaceRelativePath,
+          sha256: artifact.sha256,
+          byteSize: artifact.byteSize,
+        })
+        this.logger.info('Final Codex image artifact registered', {
+          runId,
+          agentId: run.agentId,
+          threadId: active.threadId,
+          turnId: active.turnId,
+          artifactId: artifact.artifactId,
+          path: artifact.workspaceRelativePath,
+          byteSize: artifact.byteSize,
+        })
+        value = {
+          artifactId: artifact.artifactId,
+          path: artifact.workspaceRelativePath,
+          mimeType: artifact.mimeType,
+          byteSize: artifact.byteSize,
+          sha256: artifact.sha256,
+        }
+      } else {
+        value = await callBelaFacadeTool({
+          name,
+          args,
+          origin: this.config.callbacks.baseUrl,
+          token: this.runtime.readMcpToken(run.agentId),
+          timeoutMs: this.config.callbacks.timeoutMs,
+        })
+      }
       this.repos.events.append(runId, 'dynamic_tool_completed', {
         callId: params.callId ?? null,
         tool: name,
@@ -140,6 +226,14 @@ export class RunEngine extends EventEmitter {
       }
     } catch (error) {
       const message = (error as Error).message
+      if (name === BELA_IMAGE_ARTIFACT_REGISTER_TOOL) {
+        active.artifactErrors.push(message)
+        this.repos.events.append(runId, 'image_artifact_rejected', {
+          source: 'dynamic-tool',
+          callId: params.callId ?? null,
+          error: message,
+        })
+      }
       this.repos.events.append(runId, 'dynamic_tool_completed', {
         callId: params.callId ?? null,
         tool: name,
@@ -196,6 +290,10 @@ export class RunEngine extends EventEmitter {
   async restartAgent(agentId: string): Promise<AgentRecord> {
     await this.stopAgent(agentId)
     return this.startAgent(agentId)
+  }
+
+  isAgentBusy(agentId: string): boolean {
+    return this.hasActiveRun(agentId)
   }
 
   freshThread(agentId: string): void {
@@ -273,7 +371,7 @@ export class RunEngine extends EventEmitter {
     return agent
   }
 
-  private isAgentBusy(agentId: string): boolean {
+  private hasActiveRun(agentId: string): boolean {
     return [...this.active.values()].some((run) => run.agentId === agentId)
   }
 
@@ -321,6 +419,9 @@ export class RunEngine extends EventEmitter {
           threadId,
           turnId: null,
           finalTexts: [],
+          imageItemsSeen: 0,
+          latestImagePrompt: null,
+          artifactErrors: [],
           usage: null,
           resolveCompletion: resolve,
           rejectCompletion: reject,
@@ -350,10 +451,30 @@ export class RunEngine extends EventEmitter {
       const status = turnStatus(completed)
       const latest = this.active.get(run.runId)
       if (status === 'completed') {
-        this.completeAtomically(run.runId, 'succeeded', {
-          finalResponse: latest?.finalTexts.join('\n').trim() ?? '',
-          usage: latest?.usage ?? null,
-        })
+        const artifacts = this.repos.artifacts.listForRun(run.runId)
+        const imageArtifactRequired = /\$imagegen\b/i.test(run.prompt)
+          || Boolean(latest?.imageItemsSeen)
+        if (imageArtifactRequired && artifacts.length === 0) {
+          this.completeAtomically(run.runId, 'failed', {
+            errorCode: latest?.artifactErrors.length
+              ? 'image_artifact_invalid'
+              : 'image_artifact_missing',
+            errorMessage: latest?.artifactErrors.length
+              ? latest.artifactErrors.join('; ').slice(0, 2000)
+              : 'Image generation completed without a registered final image inside the configured agent workspace',
+            usage: latest?.usage ?? null,
+          })
+        } else {
+          const finalText = latest?.finalTexts.join('\n').trim() ?? ''
+          this.completeAtomically(run.runId, 'succeeded', {
+            finalResponse: finalText || (
+              artifacts.length
+                ? `Kép elkészült: ${artifacts.map((item) => item.workspaceRelativePath).join(', ')}`
+                : ''
+            ),
+            usage: latest?.usage ?? null,
+          })
+        }
       } else if (status === 'interrupted') {
         this.completeAtomically(run.runId, 'interrupted', {
           errorCode: 'provider_interrupted',
@@ -413,6 +534,9 @@ export class RunEngine extends EventEmitter {
       stored
       && !stored.invalidatedAt
       && stored.toolContractRevision === BELA_DYNAMIC_TOOL_CONTRACT_REVISION
+      && stored.model === agent.model
+      && stored.reasoningEffort === agent.reasoningEffort
+      && stored.configRevision === agent.configRevision
     ) {
       try {
         const response = await client.request('thread/resume', {
@@ -422,6 +546,13 @@ export class RunEngine extends EventEmitter {
         const threadId = response.thread?.id
         if (!threadId) throw new Error('thread/resume returned no id')
         this.repos.threads.touchGeneration(agent.agentId, this.supervisor.generation)
+        this.logger.info('Codex thread resumed', {
+          agentId: agent.agentId,
+          threadId,
+          model: agent.model,
+          reasoningEffort: agent.reasoningEffort,
+          configRevision: agent.configRevision,
+        })
         return threadId
       } catch (error) {
         this.logger.warn('Codex thread resume failed; creating replacement thread', {
@@ -432,11 +563,17 @@ export class RunEngine extends EventEmitter {
         this.repos.threads.invalidate(agent.agentId)
       }
     } else if (stored && !stored.invalidatedAt) {
-      this.logger.info('Codex thread tool contract changed; creating replacement thread', {
+      this.logger.info('Codex thread contract changed; creating replacement thread', {
         agentId: agent.agentId,
         threadId: stored.threadId,
-        previousRevision: stored.toolContractRevision,
-        requiredRevision: BELA_DYNAMIC_TOOL_CONTRACT_REVISION,
+        previousToolContractRevision: stored.toolContractRevision,
+        requiredToolContractRevision: BELA_DYNAMIC_TOOL_CONTRACT_REVISION,
+        previousModel: stored.model,
+        requiredModel: agent.model,
+        previousReasoningEffort: stored.reasoningEffort,
+        requiredReasoningEffort: agent.reasoningEffort,
+        previousConfigRevision: stored.configRevision,
+        requiredConfigRevision: agent.configRevision,
       })
       this.repos.threads.invalidate(agent.agentId)
     }
@@ -452,9 +589,17 @@ export class RunEngine extends EventEmitter {
       threadId,
       this.supervisor.generation,
       agent.model,
+      agent.reasoningEffort,
       agent.configRevision,
       BELA_DYNAMIC_TOOL_CONTRACT_REVISION,
     )
+    this.logger.info('Codex thread started', {
+      agentId: agent.agentId,
+      threadId,
+      model: agent.model,
+      reasoningEffort: agent.reasoningEffort,
+      configRevision: agent.configRevision,
+    })
     return threadId
   }
 
@@ -580,6 +725,92 @@ export class RunEngine extends EventEmitter {
         }
       } else if (normalized.type === 'usage') {
         active.usage = object(normalized.payload.usage)
+      } else if (
+        normalized.type === 'image_generation'
+        && normalized.payload.rawMethod === 'item/completed'
+      ) {
+        active.imageItemsSeen += 1
+        const item = object(normalized.payload.item)
+        if (typeof item.revisedPrompt === 'string' && item.revisedPrompt) {
+          active.latestImagePrompt = item.revisedPrompt
+        }
+        try {
+          const providerItemId = typeof item.id === 'string' && item.id
+            ? item.id
+            : (() => {
+                throw new BridgeError(
+                  'image_item_id_missing',
+                  'Codex imageGeneration item has no provider item id',
+                  502,
+                )
+              })()
+          if (item.status !== 'completed' && item.status !== 'succeeded') {
+            throw new BridgeError(
+              'image_generation_failed',
+              `Codex image generation completed with status: ${String(item.status ?? 'unknown')}`,
+              502,
+            )
+          }
+          if (typeof item.savedPath !== 'string' || !item.savedPath) {
+            throw new BridgeError(
+              'image_saved_path_missing',
+              'Codex image generation completed without a savedPath',
+              502,
+            )
+          }
+          const agent = this.requireAgent(active.agentId)
+          if (isAbsolute(item.savedPath) && !pathIsLexicallyInside(agent.workspacePath, item.savedPath)) {
+            this.repos.events.append(runId, 'image_provider_staging_observed', {
+              providerItemId,
+              requiresWorkspaceRegistration: true,
+            })
+            this.logger.info('Codex provider image staging observed outside workspace', {
+              runId,
+              agentId: active.agentId,
+              providerItemId,
+            })
+            return
+          }
+          const inspected = this.runtime.inspectGeneratedImage(agent, item.savedPath)
+          const artifact = this.repos.artifacts.create({
+            runId,
+            agentId: active.agentId,
+            providerItemId,
+            kind: 'image',
+            status: 'ready',
+            ...inspected,
+            revisedPrompt: typeof item.revisedPrompt === 'string'
+              ? item.revisedPrompt
+              : null,
+          })
+          this.repos.events.append(runId, 'image_artifact_ready', {
+            artifactId: artifact.artifactId,
+            providerItemId,
+            mimeType: artifact.mimeType,
+            workspaceRelativePath: artifact.workspaceRelativePath,
+            sha256: artifact.sha256,
+            byteSize: artifact.byteSize,
+          })
+          this.logger.info('Codex image artifact registered', {
+            runId,
+            agentId: active.agentId,
+            artifactId: artifact.artifactId,
+            path: artifact.workspaceRelativePath,
+            byteSize: artifact.byteSize,
+          })
+        } catch (error) {
+          const message = (error as Error).message
+          active.artifactErrors.push(message)
+          this.repos.events.append(runId, 'image_artifact_rejected', {
+            error: message,
+            savedPath: typeof item.savedPath === 'string' ? item.savedPath : null,
+          })
+          this.logger.error('Codex image artifact rejected', {
+            runId,
+            agentId: active.agentId,
+            error: message,
+          })
+        }
       }
     }
     if (notification.method === 'turn/completed') active.resolveCompletion(notification)
@@ -605,7 +836,22 @@ export class RunEngine extends EventEmitter {
       if (shouldEnqueueProviderCallback(this.config.callbacks.enabled, run)) {
         this.repos.outbox.enqueue(runId, state === 'succeeded' ? 'run.completed' : 'run.failed', {
           schemaVersion: 1,
-          run,
+          run: {
+            ...run,
+            artifacts: this.repos.artifacts.listForRun(runId).map((artifact) => ({
+              artifactId: artifact.artifactId,
+              runId: artifact.runId,
+              agentId: artifact.agentId,
+              kind: artifact.kind,
+              status: artifact.status,
+              mimeType: artifact.mimeType,
+              fileName: artifact.fileName,
+              workspaceRelativePath: artifact.workspaceRelativePath,
+              byteSize: artifact.byteSize,
+              revisedPrompt: artifact.revisedPrompt,
+              createdAt: artifact.createdAt,
+            })),
+          },
         })
       }
     })

@@ -2,13 +2,17 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   realpathSync,
   renameSync,
+  statSync,
+  closeSync,
   writeFileSync,
 } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { createHmac } from 'node:crypto'
+import { createHash, createHmac } from 'node:crypto'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { BridgeConfig } from '../config.js'
@@ -34,6 +38,40 @@ function tomlString(value: string): string {
 }
 
 const MCP_SERVER = fileURLToPath(new URL('../mcp/server.js', import.meta.url))
+
+type InspectedImage = {
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp'
+  fileName: string
+  absolutePath: string
+  workspaceRelativePath: string
+  sha256: string
+  byteSize: number
+}
+
+function detectImageMime(path: string): InspectedImage['mimeType'] | null {
+  const descriptor = openSync(path, 'r')
+  try {
+    const header = Buffer.alloc(12)
+    const bytes = readSync(descriptor, header, 0, header.length, 0)
+    if (
+      bytes >= 8
+      && header.subarray(0, 8).equals(
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      )
+    ) return 'image/png'
+    if (bytes >= 3 && header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff) {
+      return 'image/jpeg'
+    }
+    if (
+      bytes >= 12
+      && header.subarray(0, 4).toString('ascii') === 'RIFF'
+      && header.subarray(8, 12).toString('ascii') === 'WEBP'
+    ) return 'image/webp'
+    return null
+  } finally {
+    closeSync(descriptor)
+  }
+}
 
 export class RuntimeManager {
   readonly root: string
@@ -133,6 +171,12 @@ export class RuntimeManager {
       'Never impersonate another agent and never use another agent identifier.',
       'Do not modify files outside the configured workspace.',
       'Do not perform external side effects unless the active approval policy explicitly permits them.',
+      'Built-in image generation, when reported available by the provider, uses gpt-image-2.',
+      'Invoke it explicitly with $imagegen when the task requires a generated or edited bitmap.',
+      'The image generator may first return a provider staging file outside the workspace.',
+      'Copy and finish the requested image inside the configured workspace.',
+      'After all copying, resizing, conversion, and editing is complete, call bela_image_artifact_register exactly once for each final image using its workspace-relative path.',
+      'Never register the provider staging path and never claim image success until bela_image_artifact_register succeeds.',
       '',
       agent.instructions.trim(),
       '',
@@ -141,6 +185,7 @@ export class RuntimeManager {
 
     const configToml = [
       `model = ${tomlString(agent.model)}`,
+      `model_reasoning_effort = ${tomlString(agent.reasoningEffort)}`,
       `approval_policy = ${tomlString(agent.approvalPolicy === 'never' ? 'never' : 'on-request')}`,
       `sandbox_mode = ${tomlString(agent.sandboxMode)}`,
       '',
@@ -154,13 +199,18 @@ export class RuntimeManager {
       workspacePath: agent.workspacePath,
       workspaceMode: agent.workspaceMode,
       model: agent.model,
+      reasoningEffort: agent.reasoningEffort,
+      imageGeneration: {
+        model: 'gpt-image-2',
+        artifactRoot: join(agent.workspacePath, '.bela', 'generated-images'),
+      },
       updatedAt: new Date().toISOString(),
     }, null, 2)}\n`, 0o600)
 
     return {
       developerInstructions: instructions,
       config: {
-        model_reasoning_effort: 'medium',
+        model_reasoning_effort: agent.reasoningEffort,
         features: {
           shell_snapshot: false,
         },
@@ -205,6 +255,63 @@ export class RuntimeManager {
     const value = readFileSync(path, 'utf8').trim()
     if (!value) throw new BridgeError('mcp_token_missing', `Béla MCP token is missing for ${agentId}`, 500)
     return value
+  }
+
+  inspectGeneratedImage(agent: AgentRecord, savedPath: string): InspectedImage {
+    if (!isAbsolute(savedPath)) {
+      throw new BridgeError('image_path_not_absolute', 'Codex image savedPath is not absolute', 502)
+    }
+    const workspace = realpathSync(agent.workspacePath)
+    let canonical: string
+    try {
+      canonical = realpathSync(savedPath)
+    } catch (error) {
+      throw new BridgeError(
+        'image_artifact_missing',
+        `Generated image cannot be resolved: ${(error as Error).message}`,
+        502,
+      )
+    }
+    if (!within(workspace, canonical)) {
+      throw new BridgeError(
+        'image_path_escape',
+        'Generated image is outside the configured agent workspace',
+        502,
+      )
+    }
+    const lstat = lstatSync(savedPath)
+    const stat = statSync(canonical)
+    if (lstat.isSymbolicLink() || !stat.isFile()) {
+      throw new BridgeError(
+        'image_artifact_not_regular',
+        'Generated image must be a non-symlink regular file',
+        502,
+      )
+    }
+    if (stat.size < 1 || stat.size > this.config.artifacts.maxImageBytes) {
+      throw new BridgeError(
+        'image_artifact_size',
+        `Generated image size must be between 1 and ${this.config.artifacts.maxImageBytes} bytes`,
+        502,
+      )
+    }
+    const mimeType = detectImageMime(canonical)
+    if (!mimeType) {
+      throw new BridgeError(
+        'image_artifact_type',
+        'Generated artifact is not a supported PNG, JPEG, or WebP image',
+        502,
+      )
+    }
+    const content = readFileSync(canonical)
+    return {
+      mimeType,
+      fileName: basename(canonical),
+      absolutePath: canonical,
+      workspaceRelativePath: relative(workspace, canonical),
+      sha256: createHash('sha256').update(content).digest('hex'),
+      byteSize: stat.size,
+    }
   }
 
   archiveAgent(agentId: string): string | null {

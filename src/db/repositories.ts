@@ -1,7 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { BridgeError } from '../errors.js'
-import type { AgentRecord, RunRecord, RunState } from '../types.js'
+import type {
+  AgentRecord,
+  ImageArtifactRecord,
+  RunRecord,
+  RunState,
+} from '../types.js'
 
 function now(): string {
   return new Date().toISOString()
@@ -28,6 +33,7 @@ type AgentRow = {
   desired_state: AgentRecord['desiredState']
   actual_state: AgentRecord['actualState']
   model: string
+  reasoning_effort: AgentRecord['reasoningEffort']
   workspace_path: string
   workspace_mode: AgentRecord['workspaceMode']
   sandbox_mode: AgentRecord['sandboxMode']
@@ -46,6 +52,7 @@ function mapAgent(row: AgentRow): AgentRecord {
     desiredState: row.desired_state,
     actualState: row.actual_state,
     model: row.model,
+    reasoningEffort: row.reasoning_effort,
     workspacePath: row.workspace_path,
     workspaceMode: row.workspace_mode,
     sandboxMode: row.sandbox_mode,
@@ -134,6 +141,7 @@ export class AgentRepository {
     agentId: string
     displayName: string
     model: string
+    reasoningEffort: AgentRecord['reasoningEffort']
     workspacePath: string
     workspaceMode: AgentRecord['workspaceMode']
     sandboxMode: AgentRecord['sandboxMode']
@@ -146,14 +154,15 @@ export class AgentRepository {
     if (!previous) {
       this.db.prepare(`
         INSERT INTO bridge_agents(
-          agent_id, display_name, model, workspace_path, workspace_mode,
+          agent_id, display_name, model, reasoning_effort, workspace_path, workspace_mode,
           sandbox_mode, approval_policy, network_enabled, instructions,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.agentId,
         input.displayName,
         input.model,
+        input.reasoningEffort,
         input.workspacePath,
         input.workspaceMode,
         input.sandboxMode,
@@ -166,6 +175,7 @@ export class AgentRepository {
     } else {
       const changed = [
         input.model !== previous.model,
+        input.reasoningEffort !== previous.reasoningEffort,
         input.workspacePath !== previous.workspacePath,
         input.workspaceMode !== previous.workspaceMode,
         input.sandboxMode !== previous.sandboxMode,
@@ -175,13 +185,14 @@ export class AgentRepository {
       ].some(Boolean)
       this.db.prepare(`
         UPDATE bridge_agents SET
-          display_name = ?, model = ?, workspace_path = ?, workspace_mode = ?,
+          display_name = ?, model = ?, reasoning_effort = ?, workspace_path = ?, workspace_mode = ?,
           sandbox_mode = ?, approval_policy = ?, network_enabled = ?,
           instructions = ?, config_revision = config_revision + ?, updated_at = ?
         WHERE agent_id = ?
       `).run(
         input.displayName,
         input.model,
+        input.reasoningEffort,
         input.workspacePath,
         input.workspaceMode,
         input.sandboxMode,
@@ -222,6 +233,7 @@ export class ThreadRepository {
     threadId: string
     appServerGeneration: number
     model: string
+    reasoningEffort: AgentRecord['reasoningEffort']
     configRevision: number
     toolContractRevision: number
     invalidatedAt: string | null
@@ -231,6 +243,7 @@ export class ThreadRepository {
       thread_id: string
       app_server_generation: number
       model: string
+      reasoning_effort: AgentRecord['reasoningEffort']
       config_revision: number
       tool_contract_revision: number
       invalidated_at: string | null
@@ -240,6 +253,7 @@ export class ThreadRepository {
       threadId: row.thread_id,
       appServerGeneration: row.app_server_generation,
       model: row.model,
+      reasoningEffort: row.reasoning_effort,
       configRevision: row.config_revision,
       toolContractRevision: row.tool_contract_revision,
       invalidatedAt: row.invalidated_at,
@@ -251,19 +265,21 @@ export class ThreadRepository {
     threadId: string,
     generation: number,
     model: string,
+    reasoningEffort: AgentRecord['reasoningEffort'],
     configRevision: number,
     toolContractRevision: number,
   ): void {
     const stamp = now()
     this.db.prepare(`
       INSERT INTO codex_threads(
-        agent_id, thread_id, app_server_generation, model, config_revision,
+        agent_id, thread_id, app_server_generation, model, reasoning_effort, config_revision,
         tool_contract_revision, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(agent_id) DO UPDATE SET
         thread_id = excluded.thread_id,
         app_server_generation = excluded.app_server_generation,
         model = excluded.model,
+        reasoning_effort = excluded.reasoning_effort,
         config_revision = excluded.config_revision,
         tool_contract_revision = excluded.tool_contract_revision,
         resumed_at = excluded.created_at,
@@ -273,6 +289,7 @@ export class ThreadRepository {
       threadId,
       generation,
       model,
+      reasoningEffort,
       configRevision,
       toolContractRevision,
       stamp,
@@ -463,6 +480,129 @@ export class EventRepository {
   }
 }
 
+type ArtifactRow = {
+  artifact_id: string
+  run_id: string
+  agent_id: string
+  provider_item_id: string
+  kind: 'image'
+  status: 'ready'
+  mime_type: ImageArtifactRecord['mimeType']
+  file_name: string
+  absolute_path: string
+  workspace_relative_path: string
+  sha256: string
+  byte_size: number
+  revised_prompt: string | null
+  created_at: string
+}
+
+function mapArtifact(row: ArtifactRow): ImageArtifactRecord {
+  return {
+    artifactId: row.artifact_id,
+    runId: row.run_id,
+    agentId: row.agent_id,
+    providerItemId: row.provider_item_id,
+    kind: row.kind,
+    status: row.status,
+    mimeType: row.mime_type,
+    fileName: row.file_name,
+    absolutePath: row.absolute_path,
+    workspaceRelativePath: row.workspace_relative_path,
+    sha256: row.sha256,
+    byteSize: row.byte_size,
+    revisedPrompt: row.revised_prompt,
+    createdAt: row.created_at,
+  }
+}
+
+export class ArtifactRepository {
+  constructor(private readonly db: Database.Database) {}
+
+  get(artifactId: string): ImageArtifactRecord | null {
+    const row = this.db.prepare(
+      'SELECT * FROM bridge_artifacts WHERE artifact_id = ?',
+    ).get(artifactId) as ArtifactRow | undefined
+    return row ? mapArtifact(row) : null
+  }
+
+  listForRun(runId: string): ImageArtifactRecord[] {
+    return (this.db.prepare(`
+      SELECT * FROM bridge_artifacts
+      WHERE run_id = ?
+      ORDER BY created_at ASC, artifact_id ASC
+    `).all(runId) as ArtifactRow[]).map(mapArtifact)
+  }
+
+  create(input: Omit<ImageArtifactRecord, 'artifactId' | 'createdAt'>): ImageArtifactRecord {
+    const existing = this.db.prepare(`
+      SELECT * FROM bridge_artifacts
+      WHERE run_id = ? AND provider_item_id = ?
+    `).get(input.runId, input.providerItemId) as ArtifactRow | undefined
+    if (existing) return mapArtifact(existing)
+
+    const artifactId = randomUUID()
+    const stamp = now()
+    this.db.prepare(`
+      INSERT INTO bridge_artifacts(
+        artifact_id, run_id, agent_id, provider_item_id, kind, status,
+        mime_type, file_name, absolute_path, workspace_relative_path,
+        sha256, byte_size, revised_prompt, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      artifactId,
+      input.runId,
+      input.agentId,
+      input.providerItemId,
+      input.kind,
+      input.status,
+      input.mimeType,
+      input.fileName,
+      input.absolutePath,
+      input.workspaceRelativePath,
+      input.sha256,
+      input.byteSize,
+      input.revisedPrompt,
+      stamp,
+    )
+    return this.get(artifactId)!
+  }
+
+  registerFinal(
+    input: Omit<ImageArtifactRecord, 'artifactId' | 'createdAt'>,
+  ): ImageArtifactRecord {
+    const existing = this.db.prepare(`
+      SELECT * FROM bridge_artifacts
+      WHERE run_id = ? AND absolute_path = ?
+      ORDER BY created_at ASC, artifact_id ASC
+      LIMIT 1
+    `).get(input.runId, input.absolutePath) as ArtifactRow | undefined
+    if (!existing) return this.create(input)
+
+    this.db.prepare(`
+      UPDATE bridge_artifacts SET
+        status = ?,
+        mime_type = ?,
+        file_name = ?,
+        workspace_relative_path = ?,
+        sha256 = ?,
+        byte_size = ?,
+        revised_prompt = COALESCE(?, revised_prompt)
+      WHERE artifact_id = ?
+    `).run(
+      input.status,
+      input.mimeType,
+      input.fileName,
+      input.workspaceRelativePath,
+      input.sha256,
+      input.byteSize,
+      input.revisedPrompt,
+      existing.artifact_id,
+    )
+    return this.get(existing.artifact_id)!
+  }
+}
+
 export class OutboxRepository {
   constructor(private readonly db: Database.Database) {}
 
@@ -522,6 +662,7 @@ export class RepositorySet {
   readonly threads: ThreadRepository
   readonly runs: RunRepository
   readonly events: EventRepository
+  readonly artifacts: ArtifactRepository
   readonly outbox: OutboxRepository
 
   constructor(readonly db: Database.Database) {
@@ -529,6 +670,7 @@ export class RepositorySet {
     this.threads = new ThreadRepository(db)
     this.runs = new RunRepository(db)
     this.events = new EventRepository(db)
+    this.artifacts = new ArtifactRepository(db)
     this.outbox = new OutboxRepository(db)
   }
 }

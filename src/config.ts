@@ -32,6 +32,9 @@ export interface BridgeConfig {
     eventRetentionDays: number
     maxPromptBytes: number
   }
+  artifacts: {
+    maxImageBytes: number
+  }
   callbacks: {
     enabled: boolean
     baseUrl: string
@@ -77,6 +80,7 @@ const SCHEMA = {
     'eventRetentionDays',
     'maxPromptBytes',
   ],
+  artifacts: ['maxImageBytes'],
   callbacks: [
     'enabled',
     'baseUrl',
@@ -170,6 +174,7 @@ function validate(raw: Record<string, unknown>): Omit<BridgeConfig, 'auth'> {
   const codex = raw.codex as Record<string, unknown>
   const storage = raw.storage as Record<string, unknown>
   const runs = raw.runs as Record<string, unknown>
+  const artifacts = raw.artifacts as Record<string, unknown>
   const callbacks = raw.callbacks as Record<string, unknown>
   const logging = raw.logging as Record<string, unknown>
   const level = string(logging.level, 'logging.level')
@@ -206,6 +211,14 @@ function validate(raw: Record<string, unknown>): Omit<BridgeConfig, 'auth'> {
       maxQueuedPerAgent: integer(runs.maxQueuedPerAgent, 'runs.maxQueuedPerAgent', 1, 1000),
       eventRetentionDays: integer(runs.eventRetentionDays, 'runs.eventRetentionDays', 1, 3650),
       maxPromptBytes: integer(runs.maxPromptBytes, 'runs.maxPromptBytes', 1024, 4 * 1024 * 1024),
+    },
+    artifacts: {
+      maxImageBytes: integer(
+        artifacts.maxImageBytes,
+        'artifacts.maxImageBytes',
+        1024,
+        100 * 1024 * 1024,
+      ),
     },
     callbacks: {
       enabled: Boolean(callbacks.enabled),

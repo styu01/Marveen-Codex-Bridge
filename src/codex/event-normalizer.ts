@@ -48,6 +48,15 @@ export function normalizeNotification(notification: RpcNotification): Normalized
         },
       }
     }
+    if (type === 'imageGeneration') {
+      return {
+        type: 'image_generation',
+        payload: {
+          item,
+          rawMethod: notification.method,
+        },
+      }
+    }
     if (type === 'commandExecution' || type === 'mcpToolCall' || type === 'fileChange') {
       return {
         type: notification.method === 'item/started' ? 'tool_call' : 'tool_result',

@@ -58,11 +58,33 @@ test('full API run succeeds, persists events, and enforces bearer auth', async (
     const unauth = await call(endpoint, 'wrong', 'GET', '/v1/meta')
     assert.equal(unauth.status, 401)
     const meta = await call(endpoint, config.auth.token, 'GET', '/v1/meta')
-    assert.equal(meta.body.bridgeVersion, '0.1.8')
+    assert.equal(meta.body.bridgeVersion, '0.2.1')
+    assert.deepEqual((meta.body.codex as Record<string, unknown>).reasoningEfforts, [
+      'medium',
+      'high',
+      'xhigh',
+    ])
+    assert.deepEqual(
+      ((meta.body.codex as Record<string, unknown>).imageGeneration),
+      {
+        available: true,
+        model: 'gpt-image-2',
+        effort: null,
+        transport: 'codex-app-server',
+        billing: 'chatgpt-subscription',
+      },
+    )
     assert.deepEqual(meta.body.toolContract, {
-      revision: 1,
+      revision: 2,
       exposure: ['dynamicTools', 'mcpInventory'],
       tools: [
+        'bela_agent_message_send',
+        'bela_agent_message_status',
+        'bela_memory_search',
+        'bela_memory_get',
+        'bela_image_artifact_register',
+      ],
+      mcpTools: [
         'bela_agent_message_send',
         'bela_agent_message_status',
         'bela_memory_search',
@@ -74,11 +96,13 @@ test('full API run succeeds, persists events, and enforces bearer auth', async (
       displayName: 'Codex Dev',
       workspacePath: workspace,
       workspaceMode: 'directory',
+      reasoningEffort: 'high',
       sandboxMode: 'workspace-write',
       approvalPolicy: 'never',
       instructions: 'Return concise results.',
     })
     assert.equal(upsert.status, 200)
+    assert.equal((upsert.body.data as { reasoningEffort: string }).reasoningEffort, 'high')
     const start = await call(endpoint, config.auth.token, 'POST', '/v1/agents/codex-dev/start')
     assert.equal(start.status, 200)
     const accepted = await call(
@@ -117,6 +141,58 @@ test('full API run succeeds, persists events, and enforces bearer auth', async (
     )
     assert.equal(duplicate.status, 200)
     assert.equal(duplicate.body.duplicate, true)
+
+    const invalidEffort = await call(endpoint, config.auth.token, 'PUT', '/v1/agents/codex-dev', {
+      displayName: 'Codex Dev',
+      workspacePath: workspace,
+      workspaceMode: 'directory',
+      reasoningEffort: 'max',
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'never',
+      instructions: 'Return concise results.',
+    })
+    assert.equal(invalidEffort.status, 400)
+
+    const changedEffort = await call(endpoint, config.auth.token, 'PUT', '/v1/agents/codex-dev', {
+      displayName: 'Codex Dev',
+      workspacePath: workspace,
+      workspaceMode: 'directory',
+      reasoningEffort: 'xhigh',
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'never',
+      instructions: 'Return concise results.',
+    })
+    assert.equal(changedEffort.status, 200)
+    assert.equal((changedEffort.body.data as { reasoningEffort: string }).reasoningEffort, 'xhigh')
+    assert.equal((changedEffort.body.data as { configRevision: number }).configRevision, 2)
+    const invalidatedAgent = await call(endpoint, config.auth.token, 'GET', '/v1/agents/codex-dev')
+    assert.ok(
+      (invalidatedAgent.body.data as { thread: { invalidatedAt: string } }).thread.invalidatedAt,
+    )
+
+    const effortRunAccepted = await call(
+      endpoint,
+      config.auth.token,
+      'POST',
+      '/v1/agents/codex-dev/runs',
+      { prompt: 'Verify effort change', context: { source: 'effort-test' } },
+      { 'idempotency-key': 'integration-run-effort-0002' },
+    )
+    const effortRunId = (effortRunAccepted.body.data as { runId: string }).runId
+    let effortRun: Record<string, unknown> = {}
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const result = await call(endpoint, config.auth.token, 'GET', `/v1/runs/${effortRunId}`)
+      effortRun = result.body.data as Record<string, unknown>
+      if (effortRun.state === 'succeeded') break
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    assert.equal(effortRun.state, 'succeeded')
+    assert.notEqual(effortRun.threadId, run.threadId)
+    const effortAgent = await call(endpoint, config.auth.token, 'GET', '/v1/agents/codex-dev')
+    assert.equal(
+      ((effortAgent.body.data as { thread: { reasoningEffort: string } }).thread).reasoningEffort,
+      'xhigh',
+    )
 
     const deleted = await call(endpoint, config.auth.token, 'DELETE', '/v1/agents/codex-dev')
     assert.equal(deleted.status, 200)
@@ -189,6 +265,241 @@ test('agent desired state and Codex thread survive a Bridge service restart', as
     assert.equal(secondRun.threadId, firstRun!.threadId)
   } finally {
     await second.stop()
+    delete process.env.BELA_CODEX_BRIDGE_TEST_TCP
+  }
+})
+
+test('image generation registers a workspace-confined artifact and exposes it through the API', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bridge-image-'))
+  const workspace = join(root, 'workspace')
+  mkdirSync(workspace)
+  let callbackPayload: Record<string, unknown> | null = null
+  const callbackServer = createServer((req, res) => {
+    const chunks: Buffer[] = []
+    req.on('data', (chunk) => chunks.push(Buffer.from(chunk)))
+    req.on('end', () => {
+      callbackPayload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{"ok":true}')
+    })
+  })
+  await new Promise<void>((resolve) => callbackServer.listen(0, '127.0.0.1', resolve))
+  const callbackAddress = callbackServer.address()
+  assert.ok(callbackAddress && typeof callbackAddress === 'object')
+  const config = testConfig(root)
+  config.callbacks.enabled = true
+  config.callbacks.baseUrl = `http://127.0.0.1:${callbackAddress.port}`
+  const service = new BridgeService(config)
+  process.env.BELA_CODEX_BRIDGE_TEST_TCP = '1'
+  await service.start()
+  try {
+    const endpoint = service.api.testPort
+    assert.ok(endpoint)
+    const upsert = await call(endpoint, config.auth.token, 'PUT', '/v1/agents/image-dev', {
+      displayName: 'Image Dev',
+      workspacePath: workspace,
+      workspaceMode: 'directory',
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'never',
+      instructions: 'Generate test images.',
+    })
+    assert.equal(upsert.status, 200)
+    assert.equal((await call(
+      endpoint,
+      config.auth.token,
+      'POST',
+      '/v1/agents/image-dev/start',
+    )).status, 200)
+    const accepted = await call(
+      endpoint,
+      config.auth.token,
+      'POST',
+      '/v1/agents/image-dev/runs',
+      {
+        prompt: 'IMAGE_GENERATION_TEST',
+        context: { kind: 'image-test', belaMessageId: 77 },
+      },
+      { 'idempotency-key': 'image-generation-run-0001' },
+    )
+    const runId = (accepted.body.data as { runId: string }).runId
+    let run: Record<string, unknown> = {}
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const result = await call(endpoint, config.auth.token, 'GET', `/v1/runs/${runId}`)
+      run = result.body.data as Record<string, unknown>
+      if (run.state === 'succeeded') break
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    assert.equal(run.state, 'succeeded')
+    const artifacts = run.artifacts as Array<Record<string, unknown>>
+    assert.equal(artifacts.length, 1)
+    const artifact = artifacts[0]!
+    assert.equal(artifact.kind, 'image')
+    assert.equal(artifact.status, 'ready')
+    assert.equal(artifact.mimeType, 'image/png')
+    assert.match(String(artifact.workspaceRelativePath), /^\.bela\/generated-images\//)
+    assert.match(String(artifact.sha256), /^[0-9a-f]{64}$/)
+    assert.ok(Number(artifact.byteSize) > 0)
+
+    const artifactResponse = await call(
+      endpoint,
+      config.auth.token,
+      'GET',
+      `/v1/artifacts/${encodeURIComponent(String(artifact.artifactId))}`,
+    )
+    assert.equal(artifactResponse.status, 200)
+    assert.equal(
+      (artifactResponse.body.data as Record<string, unknown>).runId,
+      runId,
+    )
+    const artifactList = await call(
+      endpoint,
+      config.auth.token,
+      'GET',
+      `/v1/runs/${runId}/artifacts`,
+    )
+    assert.equal((artifactList.body.data as unknown[]).length, 1)
+
+    const events = await call(endpoint, config.auth.token, 'GET', `/v1/runs/${runId}/events`)
+    assert.ok((events.body.data as Array<{ type: string }>).some(
+      (event) => event.type === 'image_artifact_ready',
+    ))
+    for (let attempt = 0; attempt < 100 && !callbackPayload; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    assert.ok(callbackPayload)
+    const callbackRun = (callbackPayload as Record<string, unknown>).run as Record<string, unknown>
+    assert.equal(callbackRun.runId, runId)
+    assert.equal((callbackRun.artifacts as unknown[]).length, 1)
+    assert.equal(
+      ((callbackRun.artifacts as Array<Record<string, unknown>>)[0]!).artifactId,
+      artifact.artifactId,
+    )
+  } finally {
+    await service.stop()
+    await new Promise<void>((resolve, reject) => callbackServer.close(
+      (error) => error ? reject(error) : resolve(),
+    ))
+    delete process.env.BELA_CODEX_BRIDGE_TEST_TCP
+  }
+})
+
+test('image generation fails closed when Codex reports a path outside the agent workspace', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bridge-image-escape-'))
+  const workspace = join(root, 'workspace')
+  mkdirSync(workspace)
+  const config = testConfig(root)
+  const service = new BridgeService(config)
+  process.env.BELA_CODEX_BRIDGE_TEST_TCP = '1'
+  await service.start()
+  try {
+    const endpoint = service.api.testPort
+    assert.ok(endpoint)
+    assert.equal((await call(endpoint, config.auth.token, 'PUT', '/v1/agents/image-dev', {
+      displayName: 'Image Dev',
+      workspacePath: workspace,
+      workspaceMode: 'directory',
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'never',
+      instructions: 'Generate test images.',
+    })).status, 200)
+    assert.equal((await call(
+      endpoint,
+      config.auth.token,
+      'POST',
+      '/v1/agents/image-dev/start',
+    )).status, 200)
+    const accepted = await call(
+      endpoint,
+      config.auth.token,
+      'POST',
+      '/v1/agents/image-dev/runs',
+      { prompt: 'IMAGE_ESCAPE_TEST', context: {} },
+      { 'idempotency-key': 'image-escape-run-0001' },
+    )
+    const runId = (accepted.body.data as { runId: string }).runId
+    let run: Record<string, unknown> = {}
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const result = await call(endpoint, config.auth.token, 'GET', `/v1/runs/${runId}`)
+      run = result.body.data as Record<string, unknown>
+      if (run.state === 'failed') break
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    assert.equal(run.state, 'failed')
+    assert.equal(run.errorCode, 'image_artifact_missing')
+    assert.match(String(run.errorMessage), /without a registered final image/)
+    assert.deepEqual(run.artifacts, [])
+  } finally {
+    await service.stop()
+    delete process.env.BELA_CODEX_BRIDGE_TEST_TCP
+  }
+})
+
+test('provider image staging is accepted only after the final workspace image is registered', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bridge-image-register-'))
+  const workspace = join(root, 'workspace')
+  mkdirSync(workspace)
+  const config = testConfig(root)
+  const service = new BridgeService(config)
+  process.env.BELA_CODEX_BRIDGE_TEST_TCP = '1'
+  await service.start()
+  try {
+    const endpoint = service.api.testPort
+    assert.ok(endpoint)
+    assert.equal((await call(endpoint, config.auth.token, 'PUT', '/v1/agents/image-dev', {
+      displayName: 'Image Dev',
+      workspacePath: workspace,
+      workspaceMode: 'directory',
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'never',
+      instructions: 'Generate test images.',
+    })).status, 200)
+    assert.equal((await call(
+      endpoint,
+      config.auth.token,
+      'POST',
+      '/v1/agents/image-dev/start',
+    )).status, 200)
+    const accepted = await call(
+      endpoint,
+      config.auth.token,
+      'POST',
+      '/v1/agents/image-dev/runs',
+      { prompt: 'IMAGE_STAGING_REGISTRATION_TEST', context: {} },
+      { 'idempotency-key': 'image-staging-register-run-0001' },
+    )
+    const runId = (accepted.body.data as { runId: string }).runId
+    let run: Record<string, unknown> = {}
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const result = await call(endpoint, config.auth.token, 'GET', `/v1/runs/${runId}`)
+      run = result.body.data as Record<string, unknown>
+      if (run.state === 'succeeded' || run.state === 'failed') break
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    assert.equal(run.state, 'succeeded')
+    assert.equal(run.finalResponse, 'FAKE_IMAGE_STAGING_REGISTRATION_OK')
+    const artifacts = run.artifacts as Array<Record<string, unknown>>
+    assert.equal(artifacts.length, 1)
+    assert.equal(artifacts[0]?.workspaceRelativePath, 'assets/final-image.png')
+    assert.equal(artifacts[0]?.mimeType, 'image/png')
+    assert.match(String(artifacts[0]?.sha256), /^[0-9a-f]{64}$/)
+
+    const events = await call(endpoint, config.auth.token, 'GET', `/v1/runs/${runId}/events`)
+    const eventData = events.body.data as Array<{
+      type: string
+      payload: Record<string, unknown>
+    }>
+    assert.ok(eventData.some((event) => event.type === 'image_provider_staging_observed'))
+    assert.ok(eventData.some(
+      (event) => event.type === 'image_artifact_ready'
+        && event.payload.source === 'dynamic-tool',
+    ))
+    assert.ok(eventData.some(
+      (event) => event.type === 'dynamic_tool_completed'
+        && event.payload.tool === 'bela_image_artifact_register'
+        && event.payload.success === true,
+    ))
+  } finally {
+    await service.stop()
     delete process.env.BELA_CODEX_BRIDGE_TEST_TCP
   }
 })
@@ -336,7 +647,7 @@ test('legacy MCP-only thread is replaced once for the dynamic tool contract', as
     assert.ok(endpoint)
     const replacement = await waitForRun(endpoint, 'tool-contract-run-0002')
     assert.notEqual(replacement.threadId, legacyThreadId)
-    assert.equal(second.repos.threads.get('codex-dev')?.toolContractRevision, 1)
+    assert.equal(second.repos.threads.get('codex-dev')?.toolContractRevision, 2)
   } finally {
     await second.stop()
     delete process.env.BELA_CODEX_BRIDGE_TEST_TCP
@@ -413,6 +724,26 @@ test('approval decline and approve survive provider request id reuse', async () 
     const declinedRunId = await submit(endpoint, 'approval-decline-run')
     const declinedApproval = await waitForApproval(endpoint, declinedRunId)
     assert.equal(declinedApproval.providerRequestId, 'reusable-approval-request-id')
+    const busyEffortChange = await call(
+      endpoint,
+      config.auth.token,
+      'PUT',
+      '/v1/agents/codex-dev',
+      {
+        displayName: 'Codex Dev',
+        workspacePath: workspace,
+        workspaceMode: 'directory',
+        reasoningEffort: 'high',
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'bela',
+        instructions: 'Deterministic approval test.',
+      },
+    )
+    assert.equal(busyEffortChange.status, 409)
+    assert.equal(
+      (busyEffortChange.body.error as { code: string }).code,
+      'agent_busy',
+    )
     const decline = await call(
       endpoint,
       config.auth.token,

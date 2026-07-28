@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BRIDGE_VERSION="0.1.8"
+BRIDGE_VERSION="0.2.1"
 EXPECTED_NODE="v22.23.1"
 EXPECTED_CODEX="0.145.0"
 SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -17,6 +17,7 @@ import type { ApprovalBroker } from '../runs/approval-broker.js'
 import type { CodexSupervisor } from '../codex/supervisor.js'
 import {
   BELA_DYNAMIC_TOOL_CONTRACT_REVISION,
+  BELA_DYNAMIC_TOOLS,
   BELA_TOOL_SPECS,
 } from '../tools/bela-tools.js'
 import { authorized } from './auth.js'
@@ -131,6 +132,23 @@ export class BridgeApiServer {
   get isListening(): boolean { return this.accepting }
   get testPort(): number | null { return this.testPortValue }
 
+  private withProviderCapabilities<T extends Record<string, unknown>>(agent: T): T & {
+    capabilities: {
+      imageGeneration: boolean
+      imageModel: string | null
+    }
+  } {
+    return {
+      ...agent,
+      capabilities: {
+        imageGeneration: this.supervisor.providerCapabilities.imageGeneration,
+        imageModel: this.supervisor.providerCapabilities.imageGeneration
+          ? 'gpt-image-2'
+          : null,
+      },
+    }
+  }
+
   async start(): Promise<void> {
     if (this.server) return
     mkdirSync(dirname(this.config.api.unixSocket), { recursive: true, mode: 0o700 })
@@ -204,7 +222,7 @@ export class BridgeApiServer {
       send(response, 200, {
         status: 'ok',
         service: 'bela-codex-bridge',
-        version: '0.1.8',
+        version: '0.2.1',
       })
       return
     }
@@ -227,19 +245,30 @@ export class BridgeApiServer {
     if (method === 'GET' && url.pathname === '/v1/meta') {
       send(response, 200, {
         apiVersion: 'v1',
-        bridgeVersion: '0.1.8',
+        bridgeVersion: '0.2.1',
         node: process.version,
         codex: {
           expectedVersion: this.config.codex.expectedVersion,
           model: this.config.codex.model,
+          reasoningEfforts: ['medium', 'high', 'xhigh'],
+          defaultReasoningEffort: 'medium',
           appServerGeneration: this.supervisor.generation,
           online: this.supervisor.online,
           compatible: this.supervisor.compatible,
+          providerCapabilities: this.supervisor.providerCapabilities,
+          imageGeneration: {
+            available: this.supervisor.providerCapabilities.imageGeneration,
+            model: 'gpt-image-2',
+            effort: null,
+            transport: 'codex-app-server',
+            billing: 'chatgpt-subscription',
+          },
         },
         toolContract: {
           revision: BELA_DYNAMIC_TOOL_CONTRACT_REVISION,
           exposure: ['dynamicTools', 'mcpInventory'],
-          tools: BELA_TOOL_SPECS.map((tool) => tool.name),
+          tools: BELA_DYNAMIC_TOOLS.map((tool) => tool.name),
+          mcpTools: BELA_TOOL_SPECS.map((tool) => tool.name),
         },
         limits: this.config.runs,
       })
@@ -262,12 +291,36 @@ export class BridgeApiServer {
             ...agent,
             thread: this.repos.threads.get(agentId),
             runtime: this.runtime.describe(agentId),
+            capabilities: {
+              imageGeneration: this.supervisor.providerCapabilities.imageGeneration,
+              imageModel: this.supervisor.providerCapabilities.imageGeneration
+                ? 'gpt-image-2'
+                : null,
+            },
           },
         })
         return
       }
       if (method === 'PUT') {
         const body = await readJson(request, this.config.api.maxBodyBytes)
+        const existing = this.repos.agents.get(agentId)
+        const reasoningEffort = enumValue(
+          body,
+          'reasoningEffort',
+          ['medium', 'high', 'xhigh'] as const,
+          'medium',
+        )
+        if (
+          existing
+          && existing.reasoningEffort !== reasoningEffort
+          && this.runs.isAgentBusy(agentId)
+        ) {
+          throw new BridgeError(
+            'agent_busy',
+            'Cannot change reasoning effort while the agent has an active run',
+            409,
+          )
+        }
         const workspaceMode = enumValue(body, 'workspaceMode', ['directory', 'worktree'] as const, 'directory')
         const workspacePath = this.runtime.prepareWorkspace(
           agentId,
@@ -278,6 +331,7 @@ export class BridgeApiServer {
           agentId,
           displayName: optionalString(body, 'displayName', agentId, 200).trim() || agentId,
           model: optionalString(body, 'model', this.config.codex.model, 200),
+          reasoningEffort,
           workspacePath,
           workspaceMode,
           sandboxMode: enumValue(
@@ -290,8 +344,13 @@ export class BridgeApiServer {
           networkEnabled: bool(body, 'networkEnabled', false),
           instructions: optionalString(body, 'instructions', '', 256 * 1024),
         })
+        if (existing && agent.configRevision !== existing.configRevision) {
+          this.repos.threads.invalidate(agentId)
+        }
         this.runtime.compile(agent)
-        send(response, 200, { data: agent })
+        send(response, 200, {
+          data: this.withProviderCapabilities(agent as unknown as Record<string, unknown>),
+        })
         return
       }
       if (method === 'DELETE') {
@@ -309,9 +368,25 @@ export class BridgeApiServer {
     if (lifecycleMatch && method === 'POST') {
       const agentId = validateAgentId(decodeURIComponent(lifecycleMatch[1]!))
       const action = lifecycleMatch[2]
-      if (action === 'start') send(response, 200, { data: await this.runs.startAgent(agentId) })
-      else if (action === 'stop') send(response, 200, { data: await this.runs.stopAgent(agentId) })
-      else if (action === 'restart') send(response, 200, { data: await this.runs.restartAgent(agentId) })
+      if (action === 'start') {
+        send(response, 200, {
+          data: this.withProviderCapabilities(
+            await this.runs.startAgent(agentId) as unknown as Record<string, unknown>,
+          ),
+        })
+      } else if (action === 'stop') {
+        send(response, 200, {
+          data: this.withProviderCapabilities(
+            await this.runs.stopAgent(agentId) as unknown as Record<string, unknown>,
+          ),
+        })
+      } else if (action === 'restart') {
+        send(response, 200, {
+          data: this.withProviderCapabilities(
+            await this.runs.restartAgent(agentId) as unknown as Record<string, unknown>,
+          ),
+        })
+      }
       else {
         this.runs.freshThread(agentId)
         send(response, 202, { data: { agentId, threadReset: true } })
@@ -350,7 +425,28 @@ export class BridgeApiServer {
     if (runMatch && method === 'GET') {
       const run = this.repos.runs.get(decodeURIComponent(runMatch[1]!))
       if (!run) throw new BridgeError('run_not_found', 'Run not found', 404)
-      send(response, 200, { data: run })
+      send(response, 200, {
+        data: {
+          ...run,
+          artifacts: this.repos.artifacts.listForRun(run.runId),
+        },
+      })
+      return
+    }
+
+    const runArtifactsMatch = url.pathname.match(/^\/v1\/runs\/([^/]+)\/artifacts$/)
+    if (runArtifactsMatch && method === 'GET') {
+      const runId = decodeURIComponent(runArtifactsMatch[1]!)
+      if (!this.repos.runs.get(runId)) throw new BridgeError('run_not_found', 'Run not found', 404)
+      send(response, 200, { data: this.repos.artifacts.listForRun(runId) })
+      return
+    }
+
+    const artifactMatch = url.pathname.match(/^\/v1\/artifacts\/([^/]+)$/)
+    if (artifactMatch && method === 'GET') {
+      const artifact = this.repos.artifacts.get(decodeURIComponent(artifactMatch[1]!))
+      if (!artifact) throw new BridgeError('artifact_not_found', 'Artifact not found', 404)
+      send(response, 200, { data: artifact })
       return
     }
 

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "bridgeVersion": "0.1.8",
+  "bridgeVersion": "0.2.1",
   "node": {
     "major": 22,
     "tested": "22.23.1",
@@ -11,6 +11,19 @@
     "binary": "/home/kisss/.local/bin/codex",
     "protocol": "app-server-jsonl",
     "experimental": true
+  },
+  "imageGeneration": {
+    "model": "gpt-image-2",
+    "capabilityMethod": "modelProvider/capabilities/read",
+    "threadItemType": "imageGeneration",
+    "billing": "chatgpt-subscription",
+    "reasoningEffort": null,
+    "artifactRegistration": {
+      "tool": "bela_image_artifact_register",
+      "dynamicToolContractRevision": 2,
+      "pathScope": "agent-workspace-relative",
+      "providerStagingIsFinal": false
+    }
   },
   "models": {
     "default": "gpt-5.6-terra",

@@ -28,6 +28,9 @@
     "eventRetentionDays": 30,
     "maxPromptBytes": 262144
   },
+  "artifacts": {
+    "maxImageBytes": 52428800
+  },
   "callbacks": {
     "enabled": true,
     "baseUrl": "http://127.0.0.1:3420",

@@ -19,6 +19,7 @@ function setup() {
     agentId: 'codex-dev',
     displayName: 'Codex Dev',
     model: 'gpt-5.6-terra',
+    reasoningEffort: 'medium',
     workspacePath: workspace,
     workspaceMode: 'directory',
     sandboxMode: 'workspace-write',

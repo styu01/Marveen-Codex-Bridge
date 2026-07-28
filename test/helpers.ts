@@ -36,6 +36,9 @@ export function testConfig(root: string): BridgeConfig {
       eventRetentionDays: 30,
       maxPromptBytes: 262144,
     },
+    artifacts: {
+      maxImageBytes: 50 * 1024 * 1024,
+    },
     callbacks: {
       enabled: false,
       baseUrl: 'http://127.0.0.1:3420',

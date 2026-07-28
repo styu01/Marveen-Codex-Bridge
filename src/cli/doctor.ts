@@ -47,13 +47,17 @@ if (config !== undefined) {
   }) && passed
   passed = check('Codex version', () => {
     const output = commandOutput(value.codex.binary, ['--version'], 15000)
-    if (!output.includes(value.codex.expectedVersion)) throw new Error(output)
-    return output
+    const line = output.split(/\r?\n/).find((candidate) => (
+      candidate.includes(value.codex.expectedVersion)
+    ))
+    if (!line) throw new Error(output)
+    return line.trim()
   }) && passed
   passed = check('ChatGPT login', () => {
     const output = commandOutput(value.codex.binary, ['login', 'status'], 30000)
-    if (!/logged in/i.test(output)) throw new Error(output)
-    return output
+    const line = output.split(/\r?\n/).find((candidate) => /logged in/i.test(candidate))
+    if (!line) throw new Error(output)
+    return line.trim()
   }) && passed
   passed = check('runtime root', () => value.storage.runtimeRoot) && passed
   passed = check('token source', () => {

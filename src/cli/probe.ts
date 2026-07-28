@@ -14,6 +14,7 @@ try {
     binary,
     model: config.codex.model,
     generation: supervisor.generation,
+    providerCapabilities: supervisor.providerCapabilities,
     pendingRpc: client.pendingCount,
     protocolErrors: client.protocolErrorCount,
   }, null, 2)}\n`)

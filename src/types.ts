@@ -1,4 +1,5 @@
 export type DesiredAgentState = 'running' | 'stopped' | 'draining' | 'disabled'
+export type ReasoningEffort = 'medium' | 'high' | 'xhigh'
 export type ActualAgentState =
   | 'offline'
   | 'starting'
@@ -30,6 +31,7 @@ export interface AgentRecord {
   desiredState: DesiredAgentState
   actualState: ActualAgentState
   model: string
+  reasoningEffort: ReasoningEffort
   workspacePath: string
   workspaceMode: 'directory' | 'worktree'
   sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -62,6 +64,23 @@ export interface RunRecord {
   updatedAt: string
 }
 
+export interface ImageArtifactRecord {
+  artifactId: string
+  runId: string
+  agentId: string
+  providerItemId: string
+  kind: 'image'
+  status: 'ready'
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp'
+  fileName: string
+  absolutePath: string
+  workspaceRelativePath: string
+  sha256: string
+  byteSize: number
+  revisedPrompt: string | null
+  createdAt: string
+}
+
 export interface NormalizedEvent {
   type:
     | 'user_input'
@@ -72,6 +91,7 @@ export interface NormalizedEvent {
     | 'approval_request'
     | 'approval_result'
     | 'usage'
+    | 'image_generation'
     | 'system_notice'
     | 'error'
     | 'turn_completed'

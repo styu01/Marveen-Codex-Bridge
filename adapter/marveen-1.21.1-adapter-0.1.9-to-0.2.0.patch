@@ -1,0 +1,572 @@
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=store' '--exclude=agents' marveen-1.21.1-0.1.9/src/__tests__/codex-provider-callback-dedupe.test.ts marveen-1.21.1-0.2.0/src/__tests__/codex-provider-callback-dedupe.test.ts
+--- marveen-1.21.1-0.1.9/src/__tests__/codex-provider-callback-dedupe.test.ts	2026-07-28 22:45:41.867314244 +0900
++++ marveen-1.21.1-0.2.0/src/__tests__/codex-provider-callback-dedupe.test.ts	2026-07-29 01:02:47.451135883 +0900
+@@ -14,6 +14,7 @@
+ 
+ import {
+   CODEX_CALLBACK_ADAPTER_REVISION,
++  buildCodexCallbackReply,
+   hasEquivalentAgentReply,
+ } from '../web/routes/provider-callbacks.js'
+ 
+@@ -22,8 +23,8 @@
+ })
+ 
+ describe('Codex provider callback reply deduplication', () => {
+-  it('advertises callback adapter revision 2', () => {
+-    expect(CODEX_CALLBACK_ADAPTER_REVISION).toBe(2)
++  it('advertises callback adapter revision 3', () => {
++    expect(CODEX_CALLBACK_ADAPTER_REVISION).toBe(3)
+   })
+ 
+   it('finds only an exact reply from the same agent and target inside the run window', () => {
+@@ -51,4 +52,41 @@
+       101,
+     )).toBe(false)
+   })
++
++  it('adds only run-scoped verified image artifact tokens to the reply', () => {
++    const runId = 'run-image-1'
++    const agentId = 'codex-image'
++    const reply = buildCodexCallbackReply({
++      runId,
++      agentId,
++      finalResponse: 'A kép elkészült.',
++      artifacts: [
++        {
++          artifactId: '76b94870-dcdd-4b21-8ea6-d6ad52e619ef',
++          runId,
++          agentId,
++          kind: 'image',
++          status: 'ready',
++          mimeType: 'image/png',
++          fileName: 'hero.png',
++          workspaceRelativePath: 'assets/hero.png',
++        },
++        {
++          artifactId: '9d91d323-7c40-41fd-a5e5-8d12e9127b5d',
++          runId: 'other-run',
++          agentId,
++          kind: 'image',
++          status: 'ready',
++          mimeType: 'image/png',
++          fileName: 'spoof.png',
++          workspaceRelativePath: '../../spoof.png',
++        },
++      ],
++    })
++    expect(reply).toContain('A kép elkészült.')
++    expect(reply).toContain(
++      '[codex-image:76b94870-dcdd-4b21-8ea6-d6ad52e619ef] hero.png — assets/hero.png',
++    )
++    expect(reply).not.toContain('spoof.png')
++  })
+ })
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=store' '--exclude=agents' marveen-1.21.1-0.1.9/src/providers/codex-provider.ts marveen-1.21.1-0.2.0/src/providers/codex-provider.ts
+--- marveen-1.21.1-0.1.9/src/providers/codex-provider.ts	2026-07-29 00:34:42.991172408 +0900
++++ marveen-1.21.1-0.2.0/src/providers/codex-provider.ts	2026-07-29 01:00:10.711139282 +0900
+@@ -59,6 +59,13 @@
+     reasoningEffort: String(
+       result.data.reasoningEffort ?? readAgentCodexProviderConfig(agentId).reasoningEffort,
+     ) as ProviderStatus['reasoningEffort'],
++    imageGenerationAvailable: (
++      result.data.capabilities as Record<string, unknown> | undefined
++    )?.imageGeneration === true,
++    imageModel: String(
++      (result.data.capabilities as Record<string, unknown> | undefined)?.imageModel
++        ?? 'gpt-image-2',
++    ),
+   }
+   statusCache.set(agentId, status)
+   return status
+@@ -79,6 +86,13 @@
+     reasoningEffort: String(
+       result.data.reasoningEffort ?? readAgentCodexProviderConfig(agentId).reasoningEffort,
+     ) as ProviderStatus['reasoningEffort'],
++    imageGenerationAvailable: (
++      result.data.capabilities as Record<string, unknown> | undefined
++    )?.imageGeneration === true,
++    imageModel: String(
++      (result.data.capabilities as Record<string, unknown> | undefined)?.imageModel
++        ?? 'gpt-image-2',
++    ),
+   }
+   statusCache.set(agentId, status)
+   return status
+@@ -106,6 +120,13 @@
+     reasoningEffort: String(
+       result.data.reasoningEffort ?? readAgentCodexProviderConfig(agentId).reasoningEffort,
+     ) as ProviderStatus['reasoningEffort'],
++    imageGenerationAvailable: (
++      result.data.capabilities as Record<string, unknown> | undefined
++    )?.imageGeneration === true,
++    imageModel: String(
++      (result.data.capabilities as Record<string, unknown> | undefined)?.imageModel
++        ?? 'gpt-image-2',
++    ),
+   }
+   statusCache.set(agentId, status)
+   return status
+@@ -118,6 +139,10 @@
+       actualState?: string
+       model?: string
+       reasoningEffort?: ProviderStatus['reasoningEffort']
++      capabilities?: {
++        imageGeneration?: boolean
++        imageModel?: string | null
++      }
+     }>('GET', `/v1/agents/${encodeURIComponent(agentId)}`)
+     const status: ProviderStatus = {
+       provider: 'codex',
+@@ -127,6 +152,8 @@
+       actualState: result.data.actualState,
+       model: result.data.model,
+       reasoningEffort: result.data.reasoningEffort,
++      imageGenerationAvailable: result.data.capabilities?.imageGeneration === true,
++      imageModel: result.data.capabilities?.imageModel ?? null,
+     }
+     statusCache.set(agentId, status)
+     return status
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=store' '--exclude=agents' marveen-1.21.1-0.1.9/src/providers/types.ts marveen-1.21.1-0.2.0/src/providers/types.ts
+--- marveen-1.21.1-0.1.9/src/providers/types.ts	2026-07-29 00:35:38.811171198 +0900
++++ marveen-1.21.1-0.2.0/src/providers/types.ts	2026-07-29 01:00:10.639139283 +0900
+@@ -33,5 +33,7 @@
+   actualState?: string
+   model?: string
+   reasoningEffort?: CodexReasoningEffort
++  imageGenerationAvailable?: boolean
++  imageModel?: string | null
+   error?: string
+ }
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=store' '--exclude=agents' marveen-1.21.1-0.1.9/src/web/routes/agents.ts marveen-1.21.1-0.2.0/src/web/routes/agents.ts
+--- marveen-1.21.1-0.1.9/src/web/routes/agents.ts	2026-07-29 00:35:38.963171194 +0900
++++ marveen-1.21.1-0.2.0/src/web/routes/agents.ts	2026-07-29 01:02:25.707136354 +0900
+@@ -322,6 +322,8 @@
+   model: string
+   provider: AgentProvider
+   providerConfig: CodexProviderConfig | null
++  imageGenerationAvailable: boolean | null
++  imageModel: string | null
+   activeModel: string | null
+   runningSince: number | null
+   authMode: AuthMode
+@@ -403,6 +405,10 @@
+     model: provider === 'codex' ? readAgentCodexProviderConfig(name).model : readAgentModel(name),
+     provider,
+     providerConfig: provider === 'codex' ? readAgentCodexProviderConfig(name) : null,
++    imageGenerationAvailable: provider === 'codex'
++      ? codexStatus?.imageGenerationAvailable ?? null
++      : null,
++    imageModel: provider === 'codex' ? codexStatus?.imageModel ?? 'gpt-image-2' : null,
+     activeModel: provider === 'codex'
+       ? codexStatus?.model ?? readAgentCodexProviderConfig(name).model
+       : running ? readActiveModelFromProjectDir(dir, runningSince ?? undefined, readAgentClaudeConfigDir(name) ?? undefined) : null,
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=store' '--exclude=agents' marveen-1.21.1-0.1.9/src/web/routes/codex-artifacts.ts marveen-1.21.1-0.2.0/src/web/routes/codex-artifacts.ts
+--- marveen-1.21.1-0.1.9/src/web/routes/codex-artifacts.ts	1970-01-01 09:00:00.000000000 +0900
++++ marveen-1.21.1-0.2.0/src/web/routes/codex-artifacts.ts	2026-07-29 01:01:20.591137766 +0900
+@@ -0,0 +1,116 @@
++import { createHash } from 'node:crypto'
++import {
++  lstatSync,
++  readFileSync,
++  realpathSync,
++  statSync,
++} from 'node:fs'
++import { basename, isAbsolute, relative, sep } from 'node:path'
++import { codexBridgeClient } from '../../providers/codex-bridge-client.js'
++import { agentDir, readAgentProvider } from '../agent-config.js'
++import { json } from '../http-helpers.js'
++import type { RouteContext } from './types.js'
++
++const ARTIFACT_ID = /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i
++const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp'])
++const MAX_IMAGE_BYTES = 50 * 1024 * 1024
++
++interface BridgeImageArtifact {
++  artifactId: string
++  runId: string
++  agentId: string
++  kind: 'image'
++  status: 'ready'
++  mimeType: 'image/png' | 'image/jpeg' | 'image/webp'
++  fileName: string
++  absolutePath: string
++  workspaceRelativePath: string
++  sha256: string
++  byteSize: number
++}
++
++function within(root: string, candidate: string): boolean {
++  const rel = relative(root, candidate)
++  return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel))
++}
++
++function safeFileName(value: string): string {
++  return basename(value).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 200) || 'codex-image'
++}
++
++export async function tryHandleCodexArtifacts(ctx: RouteContext): Promise<boolean> {
++  const { res, path, method } = ctx
++  const match = path.match(/^\/api\/codex-artifacts\/([^/]+)$/)
++  if (!match || method !== 'GET') return false
++
++  const artifactId = decodeURIComponent(match[1]!)
++  if (!ARTIFACT_ID.test(artifactId)) {
++    json(res, { error: 'Invalid Codex artifact id' }, 400)
++    return true
++  }
++
++  try {
++    const result = await codexBridgeClient.request<BridgeImageArtifact>(
++      'GET',
++      `/v1/artifacts/${encodeURIComponent(artifactId)}`,
++    )
++    const artifact = result.data
++    if (
++      artifact.artifactId !== artifactId
++      || artifact.kind !== 'image'
++      || artifact.status !== 'ready'
++      || !IMAGE_MIMES.has(artifact.mimeType)
++      || typeof artifact.agentId !== 'string'
++      || readAgentProvider(artifact.agentId) !== 'codex'
++      || typeof artifact.absolutePath !== 'string'
++      || typeof artifact.sha256 !== 'string'
++      || !/^[0-9a-f]{64}$/.test(artifact.sha256)
++      || !Number.isSafeInteger(artifact.byteSize)
++      || artifact.byteSize < 1
++      || artifact.byteSize > MAX_IMAGE_BYTES
++    ) {
++      json(res, { error: 'Invalid Codex artifact metadata' }, 502)
++      return true
++    }
++
++    const root = realpathSync(agentDir(artifact.agentId))
++    const canonical = realpathSync(artifact.absolutePath)
++    const lstat = lstatSync(artifact.absolutePath)
++    const stat = statSync(canonical)
++    if (
++      !within(root, canonical)
++      || lstat.isSymbolicLink()
++      || !stat.isFile()
++      || stat.size !== artifact.byteSize
++      || stat.size > MAX_IMAGE_BYTES
++    ) {
++      json(res, { error: 'Codex artifact file failed confinement validation' }, 409)
++      return true
++    }
++    const content = readFileSync(canonical)
++    const digest = createHash('sha256').update(content).digest('hex')
++    if (digest !== artifact.sha256) {
++      json(res, { error: 'Codex artifact integrity check failed' }, 409)
++      return true
++    }
++
++    const fileName = safeFileName(artifact.fileName)
++    res.writeHead(200, {
++      'Content-Type': artifact.mimeType,
++      'Content-Length': String(content.length),
++      'Content-Disposition': `inline; filename="${fileName}"`,
++      'Cache-Control': 'private, no-store',
++      'X-Content-Type-Options': 'nosniff',
++      'Content-Security-Policy': "default-src 'none'; sandbox",
++    })
++    res.end(content)
++  } catch (error) {
++    const status = Number((error as { status?: unknown }).status)
++    json(
++      res,
++      { error: status === 404 ? 'Codex artifact not found' : 'Codex artifact unavailable' },
++      status === 404 ? 404 : 503,
++    )
++  }
++  return true
++}
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=store' '--exclude=agents' marveen-1.21.1-0.1.9/src/web/routes/provider-callbacks.ts marveen-1.21.1-0.2.0/src/web/routes/provider-callbacks.ts
+--- marveen-1.21.1-0.1.9/src/web/routes/provider-callbacks.ts	2026-07-28 22:31:59.591332074 +0900
++++ marveen-1.21.1-0.2.0/src/web/routes/provider-callbacks.ts	2026-07-29 01:02:47.379135884 +0900
+@@ -39,9 +39,71 @@
+   errorCode?: unknown
+   errorMessage?: unknown
+   context?: unknown
++  artifacts?: unknown
+ }
+ 
+-export const CODEX_CALLBACK_ADAPTER_REVISION = 2
++interface CallbackImageArtifact {
++  artifactId: string
++  runId: string
++  agentId: string
++  kind: 'image'
++  status: 'ready'
++  mimeType: 'image/png' | 'image/jpeg' | 'image/webp'
++  fileName: string
++  workspaceRelativePath: string
++}
++
++const ARTIFACT_ID = /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i
++const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp'])
++
++export const CODEX_CALLBACK_ADAPTER_REVISION = 3
++
++function safeImageArtifacts(run: CallbackRun): CallbackImageArtifact[] {
++  if (!Array.isArray(run.artifacts)) return []
++  return run.artifacts.flatMap((value): CallbackImageArtifact[] => {
++    if (!value || typeof value !== 'object') return []
++    const item = value as Record<string, unknown>
++    const relativePath = typeof item.workspaceRelativePath === 'string'
++      ? item.workspaceRelativePath
++      : ''
++    if (
++      typeof item.artifactId !== 'string'
++      || !ARTIFACT_ID.test(item.artifactId)
++      || typeof item.runId !== 'string'
++      || item.runId !== run.runId
++      || typeof item.agentId !== 'string'
++      || item.agentId !== run.agentId
++      || item.kind !== 'image'
++      || item.status !== 'ready'
++      || typeof item.mimeType !== 'string'
++      || !IMAGE_MIMES.has(item.mimeType)
++      || typeof item.fileName !== 'string'
++      || !item.fileName
++      || !relativePath
++      || relativePath.startsWith('/')
++      || relativePath.split(/[\\/]/).includes('..')
++    ) return []
++    return [{
++      artifactId: item.artifactId,
++      runId: item.runId,
++      agentId: item.agentId,
++      kind: 'image',
++      status: 'ready',
++      mimeType: item.mimeType as CallbackImageArtifact['mimeType'],
++      fileName: item.fileName.replace(/[\r\n]/g, ' ').slice(0, 255),
++      workspaceRelativePath: relativePath.replace(/[\r\n]/g, ' ').slice(0, 4096),
++    }]
++  })
++}
++
++export function buildCodexCallbackReply(run: CallbackRun): string {
++  const text = typeof run.finalResponse === 'string' ? run.finalResponse.trim() : ''
++  const images = safeImageArtifacts(run)
++  const imageLines = images.map(
++    (image) => `[codex-image:${image.artifactId}] ${image.fileName} — ${image.workspaceRelativePath}`,
++  )
++  return [text, ...imageLines].filter(Boolean).join('\n\n')
++}
+ 
+ export function hasEquivalentAgentReply(
+   fromAgent: string,
+@@ -108,7 +170,7 @@
+     }
+ 
+     if (run.state === 'succeeded') {
+-      const reply = typeof run.finalResponse === 'string' ? run.finalResponse.trim() : ''
++      const reply = buildCodexCallbackReply(run)
+       const target = original.from_agent === 'system' ? MAIN_AGENT_ID : original.from_agent
+       const startedAt = typeof run.startedAt === 'string'
+         ? Math.floor(Date.parse(run.startedAt) / 1000)
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=store' '--exclude=agents' marveen-1.21.1-0.1.9/src/web.ts marveen-1.21.1-0.2.0/src/web.ts
+--- marveen-1.21.1-0.1.9/src/web.ts	2026-07-28 15:40:20.306548195 +0900
++++ marveen-1.21.1-0.2.0/src/web.ts	2026-07-29 01:01:20.671137765 +0900
+@@ -31,6 +31,7 @@
+ import { tryHandleProviderCallbacks } from './web/routes/provider-callbacks.js'
+ import { tryHandleCodexFacade } from './web/routes/codex-facade.js'
+ import { tryHandleCodexApprovals } from './web/routes/codex-approvals.js'
++import { tryHandleCodexArtifacts } from './web/routes/codex-artifacts.js'
+ import { tryHandleAgentTaskState } from './web/routes/agent-taskstate.js'
+ import { sweepOrphanTaskStates } from './web/agent-taskstate.js'
+ import { tryHandleDailyLog } from './web/routes/daily-log.js'
+@@ -176,6 +177,7 @@
+       if (await tryHandleProviderCallbacks(routeCtx)) return
+       if (await tryHandleCodexFacade(routeCtx)) return
+       if (await tryHandleCodexApprovals(routeCtx)) return
++      if (await tryHandleCodexArtifacts(routeCtx)) return
+       if (await tryHandleAgentTaskState(routeCtx)) return
+       if (await tryHandleAgents(routeCtx, WEB_DIR)) return
+       if (await tryHandleMarveen(routeCtx, WEB_DIR)) return
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=store' '--exclude=agents' marveen-1.21.1-0.1.9/web/app.js marveen-1.21.1-0.2.0/web/app.js
+--- marveen-1.21.1-0.1.9/web/app.js	2026-07-29 00:35:39.047171193 +0900
++++ marveen-1.21.1-0.2.0/web/app.js	2026-07-29 01:02:25.879136351 +0900
+@@ -2194,6 +2194,7 @@
+ function updateWizardProviderUI() {
+   const codex = agentProvider.value === 'codex'
+   document.getElementById('agentReasoningEffortGroup').hidden = !codex
++  document.getElementById('agentImageGenerationInfo').hidden = !codex
+   const identityLabel = document.getElementById('wizardClaudeMdLabel')
+   const soulLabel = document.getElementById('wizardSoulMdLabel')
+   const hint = document.getElementById('wizardGenHint')
+@@ -2823,6 +2824,15 @@
+   document.getElementById('agentDetailReasoningEffort').textContent = isCodex
+     ? currentAgent.providerConfig?.reasoningEffort || 'medium'
+     : '-'
++  const imageItem = document.getElementById('agentDetailImageGenerationItem')
++  imageItem.hidden = !isCodex
++  document.getElementById('agentDetailImageGeneration').textContent = isCodex
++    ? currentAgent.imageGenerationAvailable === true
++      ? `${currentAgent.imageModel || 'gpt-image-2'} · elérhető`
++      : currentAgent.imageGenerationAvailable === false
++        ? 'nem elérhető ennél az előfizetésnél'
++        : `${currentAgent.imageModel || 'gpt-image-2'} · ellenőrzés…`
++    : '-'
+ 
+   const chConnected = agentIsConnected(currentAgent)
+   document.getElementById('agentDetailChStatus').innerHTML = `<span class="tg-status"><span class="tg-dot ${chConnected ? 'connected' : 'disconnected'}"></span>${chConnected ? t('agents.channel.connected') : t('agents.channel.disconnected')}</span>`
+@@ -2832,13 +2842,16 @@
+   const providerSelect = document.getElementById('editAgentProvider')
+   const effortGroup = document.getElementById('editAgentReasoningEffortGroup')
+   const effortSelect = document.getElementById('editAgentReasoningEffort')
++  const imageInfo = document.getElementById('editAgentImageGenerationInfo')
+   providerSelect.value = currentAgent.provider || 'claude'
+   effortGroup.hidden = providerSelect.value !== 'codex'
++  imageInfo.hidden = providerSelect.value !== 'codex'
+   effortSelect.value = currentAgent.providerConfig?.reasoningEffort || 'medium'
+   providerSelect.onchange = () => {
+     const modelSelect = document.getElementById('editAgentModel')
+     const codex = providerSelect.value === 'codex'
+     effortGroup.hidden = !codex
++    imageInfo.hidden = !codex
+     if (codex) {
+       modelSelect.value = 'gpt-5.6-terra'
+       if (!effortSelect.value) effortSelect.value = 'high'
+@@ -9664,6 +9677,64 @@
+   }
+ }
+ 
++const CODEX_IMAGE_TOKEN_RE = /\[codex-image:([0-9a-f]{8}-[0-9a-f-]{27,})\]\s*([^\n]*)/gi
++
++function buildBubbleContentHtml(content) {
++  const previews = []
++  const clean = String(content || '').replace(
++    CODEX_IMAGE_TOKEN_RE,
++    (_match, artifactId, label) => {
++      previews.push({ artifactId, label: String(label || '').trim() })
++      return label ? `🖼 ${label}` : '🖼 Codex kép'
++    },
++  )
++  const previewHtml = previews.map(item => `
++    <div class="codex-image-preview"
++         data-artifact-id="${escapeAttr(item.artifactId)}"
++         style="margin-top:10px;max-width:560px">
++      <div class="muted" style="font-size:11px;margin-bottom:5px">
++        ${escapeHtml(item.label || 'Codex által generált kép')}
++      </div>
++      <div class="codex-image-loading muted" style="font-size:11px">Kép betöltése…</div>
++    </div>
++  `).join('')
++  return `${escapeHtml(clean)}${previewHtml}`
++}
++
++async function hydrateCodexImages(root) {
++  const nodes = (root || document).querySelectorAll(
++    '.codex-image-preview[data-artifact-id]:not([data-loaded])',
++  )
++  for (const node of nodes) {
++    node.dataset.loaded = 'loading'
++    const artifactId = node.dataset.artifactId
++    try {
++      const response = await fetch(`/api/codex-artifacts/${encodeURIComponent(artifactId)}`)
++      if (!response.ok) throw new Error(`HTTP ${response.status}`)
++      const blob = await response.blob()
++      if (!blob.type.startsWith('image/')) throw new Error('invalid image response')
++      const objectUrl = URL.createObjectURL(blob)
++      const image = document.createElement('img')
++      image.src = objectUrl
++      image.alt = 'Codex által generált kép'
++      image.loading = 'lazy'
++      image.style.cssText = 'display:block;max-width:100%;max-height:520px;border-radius:10px;border:1px solid var(--border);object-fit:contain;background:var(--surface)'
++      const link = document.createElement('a')
++      link.href = objectUrl
++      link.download = `codex-image-${artifactId}.png`
++      link.textContent = 'Megnyitás / letöltés'
++      link.style.cssText = 'display:inline-block;margin-top:6px;font-size:11px'
++      node.querySelector('.codex-image-loading')?.remove()
++      node.append(image, link)
++      node.dataset.loaded = 'ready'
++    } catch {
++      const loading = node.querySelector('.codex-image-loading')
++      if (loading) loading.textContent = 'A képelőnézet nem tölthető be.'
++      node.dataset.loaded = 'error'
++    }
++  }
++}
++
+ function buildBubbleHtml(m) {
+   const isOutgoing = m.from_agent === mainAgentId()
+   const senderName = isOutgoing ? mainAgentId() : m.from_agent
+@@ -9678,7 +9749,7 @@
+         <span class="bubble-id-chip">#${m.id}</span>
+         <span class="badge ${statusMeta.cls}" style="font-size:10px">${escapeHtml(statusMeta.label)}</span>
+       </div>
+-      <div class="bubble-text">${escapeHtml(m.content || '')}</div>
++      <div class="bubble-text">${buildBubbleContentHtml(m.content || '')}</div>
+       <div class="bubble-time">${when}</div>
+     </div>
+     ${isOutgoing ? `<div class="chat-bubble-avatar">${chatAvatarHtml(mainAgentId(), 28)}</div>` : ''}
+@@ -9706,6 +9777,7 @@
+       } else {
+         container.innerHTML = '<div class="chat-loading-indicator" id="chatLoadingTop" style="display:none;text-align:center;padding:8px;font-size:11px;color:var(--text-muted)">' + t('messages.loading') + '</div>'
+         container.insertAdjacentHTML('beforeend', sorted.map(buildBubbleHtml).join(''))
++        void hydrateCodexImages(container)
+         container.scrollTop = container.scrollHeight
+       }
+       if (sorted.length < limit) chatThreadState.hasMore = false
+@@ -9721,6 +9793,7 @@
+       } else {
+         container.insertAdjacentHTML('afterbegin', html)
+       }
++      void hydrateCodexImages(container)
+       // Restore scroll position so view doesn't jump
+       container.scrollTop = container.scrollHeight - prevHeight
+     }
+@@ -9750,6 +9823,7 @@
+   }
+   const sorted = [...msgs].sort((a,b) => (a.created_at||0) - (b.created_at||0))
+   container.innerHTML = sorted.map(buildBubbleHtml).join('')
++  void hydrateCodexImages(container)
+   container.scrollTop = container.scrollHeight
+ }
+ 
+diff -ruN '--exclude=node_modules' '--exclude=dist' '--exclude=store' '--exclude=agents' marveen-1.21.1-0.1.9/web/index.html marveen-1.21.1-0.2.0/web/index.html
+--- marveen-1.21.1-0.1.9/web/index.html	2026-07-29 00:34:43.079172406 +0900
++++ marveen-1.21.1-0.2.0/web/index.html	2026-07-29 01:02:25.791136352 +0900
+@@ -1935,6 +1935,13 @@
+               Csak Codex agentnél érvényes. Módosítása új Codex threadet indít.
+             </small>
+           </div>
++          <div class="form-group" id="agentImageGenerationInfo" hidden>
++            <div style="padding:10px 12px;background:var(--bg-input);border-radius:var(--radius);font-size:12px;line-height:1.5;color:var(--text-muted)">
++              <strong style="color:var(--text)">Képgenerálás: GPT-Image-2</strong><br>
++              A Codex agent a <code>$imagegen</code> képességet a ChatGPT-előfizetésből használja.
++              A Terra gondolkodási szintje a tervezést vezérli; a képgeneráló modellnek nincs effort-beállítása.
++            </div>
++          </div>
+           <div class="form-group">
+             <label for="agentProfile" data-i18n="agents.wizard.profile_label">Biztonsági profil</label>
+             <select id="agentProfile"></select>
+@@ -2042,6 +2049,10 @@
+               <span class="meta-label">Gondolkodási szint</span>
+               <span class="meta-value" id="agentDetailReasoningEffort">-</span>
+             </div>
++            <div class="agent-overview-item" id="agentDetailImageGenerationItem" hidden>
++              <span class="meta-label">Képgenerálás</span>
++              <span class="meta-value" id="agentDetailImageGeneration">ellenőrzés…</span>
++            </div>
+             <div class="agent-overview-item">
+               <span class="meta-label" data-i18n="agents.detail.skills_label">Skillek</span>
+               <span class="meta-value" id="agentDetailSkillCount">0</span>
+@@ -2173,6 +2184,14 @@
+               Mentéskor az előző thread lezárul, a következő feladat új threadben indul.
+             </small>
+           </div>
++          <div class="form-group" id="editAgentImageGenerationInfo" hidden>
++            <div style="padding:10px 12px;background:var(--bg-input);border-radius:var(--radius);font-size:12px;line-height:1.5;color:var(--text-muted)">
++              <strong>GPT-Image-2 képgenerálás</strong><br>
++              A capability-t a Codex Bridge ellenőrzi. Használat: a feladatban kérj képet,
++              vagy írd bele: <code>$imagegen</code>. Az elkészült kép a workspace-be kerül,
++              és a dashboard hitelesített előnézetet mutat.
++            </div>
++          </div>
+           <div class="form-group" id="authModeGroup">
+             <label data-i18n="agents.settings.auth_mode_label">Hitelesítési mód</label>
+             <div class="auth-mode-cards">

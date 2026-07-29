@@ -302,3 +302,10 @@ Frissítés 0.1.9-ről:
 [docs/UPGRADE-0.2.0.md](docs/UPGRADE-0.2.0.md).
 Frissítés 0.2.0-ról:
 [docs/UPGRADE-0.2.1.md](docs/UPGRADE-0.2.1.md).
+
+## Licenc
+
+A Marveen Codex Bridge saját forráskódja az Apache License 2.0 feltételei
+szerint használható. A Marveenhez és más külső komponensekhez tartozó
+adapterekre, patchfájlokra és függőségekre azok saját licencei is
+vonatkozhatnak.

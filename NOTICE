@@ -1,0 +1,37 @@
+Marveen Codex Bridge
+Copyright 2026 the Marveen Codex Bridge contributors
+
+This product includes original software licensed under the
+Apache License, Version 2.0 (see LICENSE).
+
+This product also includes, references, or is built to interoperate with
+the following third-party components, each under its own license:
+
+1. Marveen (https://github.com/Szotasz/marveen)
+   License: MIT License, Copyright (c) 2026 Szotasz
+   The files under adapter/ (marveen-*.patch, compatibility-*.sha256) are
+   compatibility patches generated against Marveen's source tree; the
+   context and removed lines in those diffs reproduce excerpts of
+   Marveen's original MIT-licensed source code. This NOTICE does not
+   relicense that Marveen-derived content under Apache-2.0 -- it remains
+   subject to Marveen's own MIT License. Only the Codex Bridge's own
+   original source code (everything outside adapter/*.patch content that
+   is not itself copied from Marveen) is licensed under Apache-2.0.
+
+2. OpenAI Codex CLI (https://github.com/openai/codex)
+   License: Apache License 2.0
+   Used as an external subprocess (Codex App Server) invoked over a local
+   JSONL connection. Not bundled or embedded; installed separately by the
+   operator per Codex CLI's own distribution terms.
+
+3. better-sqlite3 (https://github.com/WiseLibs/better-sqlite3)
+   License: MIT License
+   Runtime npm dependency, bundled with release archives together with
+   its native build tooling. better-sqlite3's transitive install-time
+   dependencies (bindings, prebuild-install, node-abi, tar-fs, semver,
+   readable-stream, and others under node_modules/) are each permissively
+   licensed (MIT, ISC, BSD-3-Clause, or Apache-2.0); no copyleft
+   dependencies are included.
+
+If you believe a component is missing from this NOTICE or misattributed,
+open an issue against this repository so it can be corrected.

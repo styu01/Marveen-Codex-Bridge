@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "systemId": "codex",
+  "listen": {
+    "host": "127.0.0.1",
+    "port": 3431
+  },
+  "storage": {
+    "database": "/home/USER/.local/state/marveen-codex-bridge/federation.sqlite3"
+  },
+  "codex": {
+    "binary": "/home/USER/.codex/packages/standalone/current/bin/codex",
+    "expectedVersion": "0.164.0",
+    "runtimeRoot": "/home/USER/.local/share/marveen-codex-bridge/runtime",
+    "allowedModels": [
+      "gpt-5.6-terra",
+      "gpt-5.6-sol",
+      "gpt-6-sol",
+      "gpt-6-luna",
+      "gpt-6.1-sol",
+      "gpt-6-astra"
+    ],
+    "startupTimeoutMs": 60000,
+    "requestTimeoutMs": 60000,
+    "turnTimeoutMs": 900000,
+    "approvalTimeoutMs": 300000,
+    "imageGenerationRequired": true,
+    "imageModel": "gpt-image-2",
+    "artifactMaxBytes": 20971520,
+    "imageMaxPixels": 16777216
+  },
+  "admin": {
+    "tokenFile": "/home/USER/.config/marveen-codex-bridge/admin.token"
+  },
+  "agents": [
+    {
+      "id": "programozo",
+      "displayName": "Codex programozó",
+      "model": "gpt-5.6-terra",
+      "capabilitySummary": "Programozás, hibakeresés és rendszerfejlesztés.",
+      "workspacePath": "/home/USER/.local/share/marveen-codex-bridge/agents/programozo",
+      "sandboxMode": "read-only",
+      "approvalPolicy": "manual",
+      "federationPeer": "marveen",
+      "reasoningEffort": "high",
+      "networkEnabled": false,
+      "developerInstructions": "A Marveen főagent által delegált feladatokat precízen hajtsd végre."
+    }
+  ],
+  "peers": [
+    {
+      "id": "marveen",
+      "baseUrl": "http://127.0.0.1:3420",
+      "inboundTokenFile": "/home/USER/.config/marveen-codex-bridge/marveen-inbound.token",
+      "outboundTokenFile": "/home/USER/.config/marveen-codex-bridge/marveen-outbound.token"
+    }
+  ],
+  "workers": {
+    "intervalMs": 250,
+    "runtimeLeaseMs": 1800000,
+    "runtimeMaxAttempts": 3,
+    "deliveryTimeoutMs": 5000,
+    "deliveryLeaseMs": 30000,
+    "deliveryMaxAttempts": 8
+  }
+}

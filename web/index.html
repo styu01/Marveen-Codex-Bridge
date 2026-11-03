@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Marveen Codex Bridge</title>
+  <link rel="stylesheet" href="/dashboard/styles.css">
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">Federation Edition</p>
+      <h1>Marveen Codex Bridge</h1>
+    </div>
+    <div id="connection" class="badge offline">Nincs kapcsolat</div>
+  </header>
+
+  <main>
+    <section id="login-panel" class="panel login">
+      <h2>Admin hozzáférés</h2>
+      <p>A token csak ebben a böngészőfülben marad meg.</p>
+      <form id="login-form">
+        <label for="token">Admin token</label>
+        <div class="row">
+          <input id="token" name="token" type="password" autocomplete="off" required>
+          <button type="submit">Kapcsolódás</button>
+        </div>
+        <p id="login-error" class="error" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <div id="dashboard" hidden>
+      <nav>
+        <button id="refresh" type="button">Frissítés</button>
+        <button id="logout" class="secondary" type="button">Kilépés</button>
+      </nav>
+
+      <section class="cards" id="summary-cards"></section>
+
+      <section class="panel">
+        <h2>Codex agentek</h2>
+        <div id="agents"></div>
+      </section>
+
+      <section class="panel settings-panel">
+        <div class="section-heading">
+          <div>
+            <h2>Agent modell, szerepkör és effort</h2>
+            <p class="muted">Csak a szerver allowlistáján szereplő és a Codex-fiókban aktuálisan elérhető modell választható. A sikeres mentés lezárja a régi Codex-threadet.</p>
+          </div>
+          <button id="restore-settings" class="secondary" type="button" disabled>Előző beállítás visszaállítása</button>
+        </div>
+        <form id="agent-settings-form">
+          <div class="settings-meta" id="settings-current"></div>
+          <label for="settings-actor">Módosító neve</label>
+          <input id="settings-actor" name="actor" maxlength="80" autocomplete="name" required>
+          <label for="settings-model">Codex modell</label>
+          <select id="settings-model" name="model" required></select>
+          <label for="settings-effort">Reasoning effort</label>
+          <select id="settings-effort" name="reasoningEffort" required></select>
+          <label for="settings-role">Developer instructions (szerepkör)</label>
+          <textarea id="settings-role" name="developerInstructions" rows="14" maxlength="102400" required></textarea>
+          <div class="form-actions">
+            <button id="save-settings" type="submit">Módosítás mentése</button>
+            <span id="settings-status" class="muted" aria-live="polite"></span>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Beállítási auditnapló</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Idő</th><th>Ki</th><th>Művelet</th><th>Modell</th><th>Effort</th><th>Eredmény</th></tr></thead>
+            <tbody id="settings-audit"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Függő jóváhagyások</h2>
+        <div id="approvals"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Legutóbbi futások</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Agent</th><th>Modell</th><th>Effort</th><th>Állapot</th><th>Run</th><th>Frissítve</th></tr></thead>
+            <tbody id="runs"></tbody>
+          </table>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <script src="/dashboard/app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+[Unit]
+Description=Marveen Codex Bridge Federation
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=@NODE_BIN@ @RELEASE_ROOT@/src/main.mjs
+Environment=MARVEEN_CODEX_BRIDGE_CONFIG=@CONFIG_PATH@
+Environment=MARVEEN_CODEX_BRIDGE_RUNTIME_MODULE=@RELEASE_ROOT@/src/codex-runtime-module.mjs
+Environment=MARVEEN_CODEX_BRIDGE_BETTER_SQLITE3_PATH=@BETTER_SQLITE3_PATH@
+Environment=CODEX_HOME=@CODEX_HOME@
+WorkingDirectory=@RELEASE_ROOT@
+Restart=on-failure
+RestartSec=5
+# Allow in-flight, heartbeating Codex turns to finish (15 minute turn timeout
+# plus startup and cleanup). A forced stop still produces indeterminate runs.
+TimeoutStopSec=1900
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@CONFIG_ROOT@ @STATE_ROOT@ @DATA_ROOT@ @CODEX_HOME@
+@AGENT_WORKSPACE_READ_WRITE_PATHS@
+ReadOnlyPaths=@CONFIG_ROOT@/admin.token @CONFIG_ROOT@/marveen-inbound.token @CONFIG_ROOT@/marveen-outbound.token @CONFIG_ROOT@/marveen-pairing.env
+UMask=0077
+
+[Install]
+WantedBy=default.target

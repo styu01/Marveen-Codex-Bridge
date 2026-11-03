@@ -1,7 +1,28 @@
 node_modules/
-dist/
-var/
-*.sock
-*.log
+
+# Runtime state and secrets
+state/
+private/
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.token
+*.secret
 .env
+.env.*
+!.env.example
+
+# Generated output
 coverage/
+dist/
+logs/
+*.log
+*.tar.gz
+*.sha256
+
+# Local editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

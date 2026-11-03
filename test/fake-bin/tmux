@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+echo "FAIL: Federation unit test unexpectedly invoked tmux" >&2
+exit 127

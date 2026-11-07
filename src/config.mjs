@@ -291,7 +291,7 @@ export function loadServiceConfig(path) {
       ),
       turnTimeoutMs: integer(
         input.codex.turnTimeoutMs,
-        900_000,
+        2_700_000,
         { min: 10_000, max: 3_600_000 },
         'codex.turnTimeoutMs',
       ),
@@ -337,7 +337,7 @@ export function loadServiceConfig(path) {
       ),
       runtimeLeaseMs: integer(
         input.workers?.runtimeLeaseMs,
-        1_800_000,
+        2_700_000,
         { min: 1_000, max: 3_600_000 },
         'workers.runtimeLeaseMs',
       ),

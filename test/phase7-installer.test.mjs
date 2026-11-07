@@ -83,9 +83,9 @@ exec /usr/bin/id "$@"
   assert.equal(
     JSON.parse(readFileSync(join(
       data,
-      'releases/0.3.4/package.json',
+      'releases/0.3.4.1/package.json',
     ))).version,
-    '0.3.4',
+    '0.3.4.1',
   )
   const configRoot = join(home, '.config/marveen-codex-bridge')
   assert.equal(lstatSync(join(configRoot, 'config.json')).mode & 0o777, 0o600)
@@ -151,7 +151,7 @@ exec /usr/bin/id "$@"
   })
   chmodSync(legacyConfigPath, 0o600)
 
-  const installedRelease = join(data, 'releases/0.3.4')
+  const installedRelease = join(data, 'releases/0.3.4.1')
   const staleMarker = join(installedRelease, 'STALE-CANDIDATE')
   writeFileSync(staleMarker, 'must be replaced\n')
   const replacement = spawnSync('bash', [
@@ -186,7 +186,7 @@ exec /usr/bin/id "$@"
   )
   assert.ok(
     readdirSync(join(data, 'releases'))
-      .some((name) => name.startsWith('.0.3.4.superseded.')),
+      .some((name) => name.startsWith('.0.3.4.1.superseded.')),
   )
   const replacementUnit = readFileSync(unitPath, 'utf8')
   assert.match(

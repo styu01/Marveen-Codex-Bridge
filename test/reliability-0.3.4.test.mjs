@@ -33,11 +33,11 @@ function worker(store, runtime, leaseMs = 120, workerId = 'worker-a') {
   })
 }
 
-test('0.3.4 default runtime lease is thirty minutes', () => {
+test('0.3.4 default runtime lease is forty-five minutes', () => {
   const instance = new FederationInboxOrchestrator({
     store: {}, runtime: { run() {} }, systemId: 'codex', workerId: 'w',
   })
-  assert.equal(instance.leaseMs, 1_800_000)
+  assert.equal(instance.leaseMs, 2_700_000)
   assert.equal(instance.heartbeatIntervalMs, 30_000)
 })
 

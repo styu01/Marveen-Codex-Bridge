@@ -185,13 +185,15 @@ required_files=(
   test/federation-cutover-api.test.mjs
   test/service-e2e.test.mjs
   test/sqlite-driver-parity.test.mjs
-  scripts/production-canary-0.3.4.mjs
+  scripts/production-canary-0.3.4.1.mjs
   scripts/migrate-models-0.3.3.mjs
   scripts/check-codex-models-0.3.3.mjs
   scripts/verify-model-selection-0.3.3.mjs
   scripts/migrate-lease-0.3.4.mjs
   test/reliability-0.3.4.test.mjs
   src/model-policy.mjs
+  scripts/migrate-timeouts-0.3.4.1.mjs
+  test/timeout-policy-0.3.4.1.test.mjs
 )
 for file in "${required_files[@]}"; do
   [[ -f "${SOURCE_ROOT}/${file}" ]] \
@@ -206,7 +208,7 @@ NODE_OPTIONS=--no-warnings "${NODE_BIN}" -e '
   const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json")))
   const lock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json")))
   const example = JSON.parse(fs.readFileSync(path.join(root, "config/config.example.json")))
-  if (pkg.version !== "0.3.4") throw new Error("wrong package version")
+  if (pkg.version !== "0.3.4.1") throw new Error("wrong package version")
   if (pkg.dependencies?.["better-sqlite3"] !== "11.10.0") {
     throw new Error("better-sqlite3 must be pinned")
   }
@@ -219,6 +221,8 @@ NODE_OPTIONS=--no-warnings "${NODE_BIN}" -e '
     || example.codex?.imageGenerationRequired !== true
     || example.codex?.imageModel !== "gpt-image-2"
     || JSON.stringify(example.codex?.allowedModels) !== JSON.stringify(["gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"])
+    || example.codex?.turnTimeoutMs !== 2_700_000
+    || example.workers?.runtimeLeaseMs !== 2_700_000
   ) {
     throw new Error("invalid example config")
   }
@@ -255,9 +259,9 @@ TEST_LOG="$(mktemp)"
     NODE_OPTIONS=--no-warnings \
     "${NODE_BIN}" --test --test-concurrency=1 test/*.test.mjs
 ) | tee "${TEST_LOG}"
-grep -Eq '^(#|ℹ) tests 151$' "${TEST_LOG}" \
+grep -Eq '^(#|ℹ) tests 157$' "${TEST_LOG}" \
   || fail "expected exactly 151 tests"
-grep -Eq '^(#|ℹ) pass 151$' "${TEST_LOG}" \
+grep -Eq '^(#|ℹ) pass 157$' "${TEST_LOG}" \
   || fail "expected exactly 151 passing tests"
 grep -Eq '^(#|ℹ) fail 0$' "${TEST_LOG}" \
   || fail "test failures were reported"

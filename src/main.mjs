@@ -32,7 +32,7 @@ const service = new FederationBridgeService({ config, runtime, settingsManager }
 if (typeof runtime.start === 'function') await runtime.start()
 const endpoint = await service.start()
 log('info', 'service_started', {
-  bridgeVersion: '0.3.4',
+  bridgeVersion: '0.3.4.1',
   host: endpoint.host,
   port: endpoint.port,
   systemId: config.systemId,

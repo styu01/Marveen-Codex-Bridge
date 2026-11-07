@@ -1,6 +1,6 @@
 {
   "name": "marveen-codex-bridge-federation",
-  "version": "0.3.4",
+  "version": "0.3.4.1",
   "private": true,
   "type": "module",
   "engines": {

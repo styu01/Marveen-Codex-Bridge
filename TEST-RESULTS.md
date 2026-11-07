@@ -215,3 +215,8 @@ RESULT: 0.3.3 CANDIDATE R2 MOCK GATE PASS; WSL PRODUCTION CANARY REQUIRED.
 - Baseline 138 + 13 reliability tests = 151 required tests.
 - Local native better-sqlite3 full suite **NOT run**, due to offline npm dependency unavailable.
 - Read `RELEASE-0.3.4.md` before attempting production cutover.
+
+
+### 0.3.4.1 candidate
+
+Új 45-perces alapérték-, migrációs és megszakításidőzítő-tesztek. A teljes 157 tesztes ellenőrzést GitHub CI-ben és a telepítővel a célgépen kell lefuttatni. Az éles E2E külön jóváhagyási pont.

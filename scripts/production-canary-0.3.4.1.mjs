@@ -35,7 +35,7 @@ const options = {
 }
 
 function usage() {
-  console.log(`Usage: production-canary-0.3.4.mjs [options]
+  console.log(`Usage: production-canary-0.3.4.1.mjs [options]
 
 Default mode is read-only preflight. Mutating Terra -> Sol -> Terra and
 Federation canaries require --execute.
@@ -117,7 +117,7 @@ async function main() {
   }
   requireService('marveen-codex-bridge.service', true)
   requireService('bela-codex-bridge.service', false)
-  if (installedVersion() !== '0.3.4') throw new Error('Active Bridge must be version 0.3.4')
+  if (installedVersion() !== '0.3.4.1') throw new Error('Active Bridge must be version 0.3.4.1')
   if (marveenVersion() !== options.expectedMarveenVersion) {
     throw new Error(`Marveen must be version ${options.expectedMarveenVersion}`)
   }
@@ -138,7 +138,7 @@ async function main() {
     peerId: options.peerId,
   })
   if (!options.execute) {
-    console.log('RESULT: 0.3.4 PRODUCTION CANARY READ-ONLY PREFLIGHT PASS')
+    console.log('RESULT: 0.3.4.1 PRODUCTION CANARY READ-ONLY PREFLIGHT PASS')
     return
   }
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)
@@ -157,7 +157,7 @@ async function main() {
     remoteAgentId: options.remoteAgentId,
   })
   console.log(JSON.stringify(result))
-  console.log('RESULT: 0.3.4 WSL SYSTEMD MODEL SELECTION AND MARVEEN 1.34.1 CANARY PASS')
+  console.log('RESULT: 0.3.4.1 WSL SYSTEMD MODEL SELECTION AND MARVEEN 1.34.1 CANARY PASS')
 }
 
 const invoked = process.argv[1]

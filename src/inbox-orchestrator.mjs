@@ -12,7 +12,7 @@ export class FederationInboxOrchestrator {
     runtime,
     systemId,
     workerId,
-    leaseMs = 1_800_000,
+    leaseMs = 2_700_000,
     heartbeatIntervalMs = null,
     maxAttempts = 3,
     initialDelayMs = 1_000,

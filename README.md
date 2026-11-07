@@ -1,4 +1,4 @@
-# Marveen Codex Bridge Federation 0.3.4
+# Marveen Codex Bridge Federation 0.3.4.1
 
 Önálló, frissítésálló Federation Bridge a Marveen/Béla és a valódi OpenAI
 Codex CLI között. A Bridge a Marveenben egy föderált `programozo` agentet tesz
@@ -26,28 +26,19 @@ A cél nem egy Marveen-fork fenntartása. A Bridge:
 Ez csökkenti annak kockázatát, hogy egy Marveen-frissítés eltöri a Codex-
 integrációt, vagy egy Bridge-frissítés módosítja a Béla rendszer forrását.
 
-## Kiadási állapot (2026-11-03)
+## Kiadási állapot – 0.3.4.1 candidate
 
-**Aktuális kiadás: Marveen Codex Bridge 0.3.4 candidate.**
-A kiadás az üzemeltető WSL rendszerében **151/151 automatizált teszten megfelelt**,
-a rendszer 0.3.4 verzióval és 30 perces lease-konfigurációval `ready` állapotot jelentett.
-Ez **nem** helyettesíti a még elvégzendő, valós Marveen → Codex → Marveen hosszú futású E2E tesztet.
+**A 0.3.4.1 a Codex futási és a worker-bérlet időkeretét egyaránt 45 percre (2 700 000 ms) állítja.**
+A 30 másodpercenkénti lease-heartbeat változatlan, és a hat támogatott modell megmarad.
+A két érték összhangja nem garancia a hibamentességre: jóváhagyásra várakozás is a Codex-turn idejéből fogy, a 45 percnél hosszabb futás megszakadhat.
 
-| Elem | Állapot |
-|---|---|
-| Bridge | `0.3.4-candidate`, forrás + csomag a repositoryban |
-| Marveen célkörnyezet | `1.34.1`, Federation v1 |
-| Node.js | `22.23.1` |
-| Codex CLI | `0.164.0`, külön telepített bináris |
-| Modellek | `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6-astra` |
-| Runtime lease | 30 perc (`1800000` ms), alapértelmezett heartbeat 30 másodperc |
-| Automatizált tesztek | **151/151 PASS** a cél WSL gépen |
-| Élő hosszú Codex E2E | **Még külön ellenőrizendő** |
-
-A kiadás és a **javított r2 telepítő** a [releases/](releases/) könyvtárban található;
-a korábbi verziók elérhetők a Git-előzményekben.
-Lásd: [RELEASE-0.3.4.md](RELEASE-0.3.4.md) és
-[releases/TELEPITES-0.3.4-WSL.md](releases/TELEPITES-0.3.4-WSL.md).
+- Alapértékek: `codex.turnTimeoutMs = 2700000`, `workers.runtimeLeaseMs = 2700000`.
+- Frissítéskor a telepítő a **meglévő konfigurációba is beírja** mindkét értéket; minden más mezőt változatlanul hagy.
+- Verzió: `0.3.4.1` candidate, Marveen `1.34.1`, Node `22.23.1`, Codex CLI `0.164.0`.
+- Modellek: `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6-astra`.
+- Automatizált tesztek: 157 teszt a teljes natív környezetben, élesítés előtti kötelező ellenőrzéssel.
+- A hosszú, valós Marveen → Codex → Marveen feladat tesztje **külön szükséges**.
+- [Kiadási dokumentáció](RELEASE-0.3.4.1.md).
 
 ## Fő képességek
 

@@ -106,7 +106,7 @@ test('real entrypoint starts with production driver and stops cleanly', async (t
     stderr += chunk.toString('utf8')
   })
   const started = await waitForJsonLine(child, 'service_started')
-  assert.equal(started.bridgeVersion, '0.3.4')
+  assert.equal(started.bridgeVersion, '0.3.4.1')
   const ready = await fetch(`http://127.0.0.1:${started.port}/readyz`)
   assert.equal(ready.status, 200)
   assert.equal((await ready.json()).status, 'ready')

@@ -11,7 +11,7 @@ import { FederationInboxOrchestrator } from './inbox-orchestrator.mjs'
 import { FederationOutboxWorker } from './outbox-delivery.mjs'
 import { publicConfig } from './config.mjs'
 
-const BRIDGE_VERSION = '0.3.4'
+const BRIDGE_VERSION = '0.3.4.1'
 const DASHBOARD_FILES = new Map([
   ['/dashboard', ['text/html; charset=utf-8', readFileSync(new URL('../web/index.html', import.meta.url))]],
   ['/dashboard/', ['text/html; charset=utf-8', readFileSync(new URL('../web/index.html', import.meta.url))]],

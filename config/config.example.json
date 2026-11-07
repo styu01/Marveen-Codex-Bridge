@@ -22,7 +22,7 @@
     ],
     "startupTimeoutMs": 60000,
     "requestTimeoutMs": 60000,
-    "turnTimeoutMs": 900000,
+    "turnTimeoutMs": 2700000,
     "approvalTimeoutMs": 300000,
     "imageGenerationRequired": true,
     "imageModel": "gpt-image-2",
@@ -57,7 +57,7 @@
   ],
   "workers": {
     "intervalMs": 250,
-    "runtimeLeaseMs": 1800000,
+    "runtimeLeaseMs": 2700000,
     "runtimeMaxAttempts": 3,
     "deliveryTimeoutMs": 5000,
     "deliveryLeaseMs": 30000,

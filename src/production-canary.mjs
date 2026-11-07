@@ -29,11 +29,11 @@ function settingsFrom(body) {
 function assertReady(body) {
   if (
     body?.status !== 'ready'
-    || body?.bridgeVersion !== '0.3.4'
+    || body?.bridgeVersion !== '0.3.4.1'
     || body?.database !== true
     || body?.runtime !== true
   ) {
-    throw fail('bridge_not_ready', 'Bridge 0.3.4 is not fully ready')
+    throw fail('bridge_not_ready', 'Bridge 0.3.4.1 is not fully ready')
   }
 }
 

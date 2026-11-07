@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.3.4"
+VERSION="0.3.4.1"
 LEGACY_MARVEEN_VERSION="1.21.1"
 EXPECTED_MARVEEN_VERSION="1.25.1"
 SOURCE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"

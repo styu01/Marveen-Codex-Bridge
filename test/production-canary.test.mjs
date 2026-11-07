@@ -18,7 +18,7 @@ function fixture() {
   const bridgeRequest = async (path, options = {}) => {
     if (path === '/readyz') {
       return { status: 200, body: {
-        status: 'ready', bridgeVersion: '0.3.4', database: true, runtime: true,
+        status: 'ready', bridgeVersion: '0.3.4.1', database: true, runtime: true,
       } }
     }
     if (path === '/v1/dashboard/agent-settings' && (options.method ?? 'GET') === 'GET') {

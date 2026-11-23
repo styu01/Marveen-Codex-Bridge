@@ -49,7 +49,7 @@ function setup(t, overrides = {}) {
     storage: { database },
     codex: {
       binary: fakeCodex,
-      expectedVersion: '0.164.0',
+      expectedVersion: '0.171.0',
       runtimeRoot,
       allowedModels: ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"],
       startupTimeoutMs: 5_000,

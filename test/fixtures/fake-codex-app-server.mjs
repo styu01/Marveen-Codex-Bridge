@@ -7,7 +7,7 @@ import { join } from 'node:path'
 
 const args = process.argv.slice(2)
 if (args[0] === '--version') {
-  process.stdout.write(`codex-cli ${process.env.FAKE_CODEX_VERSION ?? '0.164.0'}\n`)
+  process.stdout.write(`codex-cli ${process.env.FAKE_CODEX_VERSION ?? '0.171.0'}\n`)
   process.exit(0)
 }
 if (args[0] === 'login' && args[1] === 'status') {
@@ -121,14 +121,14 @@ input.on('line', (line) => {
     )
   }
   if (method === 'initialize') {
-    respond(id, { serverInfo: { name: 'fake-codex', version: '0.164.0' } })
+    respond(id, { serverInfo: { name: 'fake-codex', version: '0.171.0' } })
     return
   }
   if (method === 'model/list') {
     respond(id, {
       data: process.env.FAKE_CODEX_NO_TERRA === '1'
         ? [{ model: 'gpt-5.5' }]
-        : [{ model: 'gpt-5.6-terra' }, { model: 'gpt-5.6-sol' }, { model: 'gpt-6-sol' }, { model: 'gpt-6-luna' }, { model: 'gpt-6.1-sol' }, { model: 'gpt-6-astra' }, { model: 'gpt-5.5' }],
+        : [{ model: 'gpt-5.6-terra' }, { model: 'gpt-5.6-sol' }, { model: 'gpt-6-sol' }, { model: 'gpt-6-luna' }, { model: 'gpt-6.1-sol' }, { model: 'gpt-6-astra' }, { model: 'gpt-6.1-terra' }, { model: 'gpt-6.2-sol' }, { model: 'gpt-6.2-astra' }, { model: 'gpt-5.5' }],
     })
     return
   }

@@ -84,7 +84,7 @@ function runtimeConfig(env, overrides = {}) {
     storage: { database: env.database },
     codex: {
       binary: fakeCodex,
-      expectedVersion: '0.164.0',
+      expectedVersion: '0.171.0',
       runtimeRoot: env.runtimeRoot,
       startupTimeoutMs: 5_000,
       requestTimeoutMs: 5_000,

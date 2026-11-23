@@ -1,4 +1,4 @@
-# Marveen Codex Bridge Federation 0.3.4.1
+# Marveen Codex Bridge Federation 0.3.5
 
 Önálló, frissítésálló Federation Bridge a Marveen/Béla és a valódi OpenAI
 Codex CLI között. A Bridge a Marveenben egy föderált `programozo` agentet tesz
@@ -26,19 +26,16 @@ A cél nem egy Marveen-fork fenntartása. A Bridge:
 Ez csökkenti annak kockázatát, hogy egy Marveen-frissítés eltöri a Codex-
 integrációt, vagy egy Bridge-frissítés módosítja a Béla rendszer forrását.
 
-## Kiadási állapot – 0.3.4.1 candidate
+## Kiadási állapot (2026-11-23)
 
-**A 0.3.4.1 a Codex futási és a worker-bérlet időkeretét egyaránt 45 percre (2 700 000 ms) állítja.**
-A 30 másodpercenkénti lease-heartbeat változatlan, és a hat támogatott modell megmarad.
-A két érték összhangja nem garancia a hibamentességre: jóváhagyásra várakozás is a Codex-turn idejéből fogy, a 45 percnél hosszabb futás megszakadhat.
-
-- Alapértékek: `codex.turnTimeoutMs = 2700000`, `workers.runtimeLeaseMs = 2700000`.
-- Frissítéskor a telepítő a **meglévő konfigurációba is beírja** mindkét értéket; minden más mezőt változatlanul hagy.
-- Verzió: `0.3.4.1` candidate, Marveen `1.34.1`, Node `22.23.1`, Codex CLI `0.164.0`.
-- Modellek: `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6-astra`.
-- Automatizált tesztek: 157 teszt a teljes natív környezetben, élesítés előtti kötelező ellenőrzéssel.
-- A hosszú, valós Marveen → Codex → Marveen feladat tesztje **külön szükséges**.
-- [Kiadási dokumentáció](RELEASE-0.3.4.1.md).
+**0.3.5 candidate**: 3 új modellel bővült az engedélyezett katalógus, a korábbi hat modell változatlanul megmarad.
+A három új modell `gpt-6.1-terra`, `gpt-6.2-sol`, `gpt-6.2-astra`.
+A szükséges külön telepített CLI `0.171.0`; a régi `0.164.0` megmarad visszaállításhoz.
+A Codex turn és a worker lease egyaránt **45 perc**; a heartbeat legfeljebb 30 másodperces.
+A kiválasztott modell/effort **nem változik meg automatikusan**.
+A ténylegesen felajánlott modellek a `model/list` elérhetőségtől függenek.
+Éles telepítéshez lásd: [TELEPITES-0.3.5-WSL.md](TELEPITES-0.3.5-WSL.md).
+A teljes automatikus teszt és WSL-alapú élő modellfuttatás a candidate elfogadásának feltétele.
 
 ## Fő képességek
 

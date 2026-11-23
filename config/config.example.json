@@ -10,7 +10,7 @@
   },
   "codex": {
     "binary": "/home/USER/.codex/packages/standalone/current/bin/codex",
-    "expectedVersion": "0.164.0",
+    "expectedVersion": "0.171.0",
     "runtimeRoot": "/home/USER/.local/share/marveen-codex-bridge/runtime",
     "allowedModels": [
       "gpt-5.6-terra",
@@ -18,7 +18,10 @@
       "gpt-6-sol",
       "gpt-6-luna",
       "gpt-6.1-sol",
-      "gpt-6-astra"
+      "gpt-6-astra",
+      "gpt-6.1-terra",
+      "gpt-6.2-sol",
+      "gpt-6.2-astra"
     ],
     "startupTimeoutMs": 60000,
     "requestTimeoutMs": 60000,

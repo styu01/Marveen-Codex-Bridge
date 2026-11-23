@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.3.4.1"
+VERSION="0.3.5"
 SOURCE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 NODE_BIN=""
 CODEX_BIN=""
@@ -49,8 +49,8 @@ NODE_REAL="$(readlink -f -- "${NODE_BIN}")"
 CODEX_REAL="$(readlink -f -- "${CODEX_BIN}")"
 [[ "$("${NODE_REAL}" --version)" == v22.* ]] \
   || { echo "Node 22 is required" >&2; exit 1; }
-"${CODEX_REAL}" --version | grep -q '0\.164\.0' \
-  || { echo "Codex CLI 0.164.0 is required" >&2; exit 1; }
+"${CODEX_REAL}" --version | grep -q '0\.171\.0' \
+  || { echo "Codex CLI 0.171.0 is required" >&2; exit 1; }
 "${CODEX_REAL}" login status 2>&1 | grep -q '^Logged in using' \
   || { echo "Codex ChatGPT login is required" >&2; exit 1; }
 
@@ -198,9 +198,9 @@ elif [[ ! -f "${CONFIG_PATH}" ]]; then
   "storage": {"database": "${DATABASE_PATH}"},
   "codex": {
     "binary": "${CODEX_REAL}",
-    "expectedVersion": "0.164.0",
+    "expectedVersion": "0.171.0",
     "runtimeRoot": "${RUNTIME_ROOT}",
-    "allowedModels": ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"],
+    "allowedModels": ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra"],
     "imageGenerationRequired": true,
     "imageModel": "gpt-image-2"
   },
@@ -251,7 +251,7 @@ const config = JSON.parse(readFileSync(configPath, 'utf8'))
 const agent = config.agents?.find((entry) => entry?.id === 'programozo')
 if (agent && (!agent.developerInstructions || agent.developerInstructions.trim() === '')) {
   agent.developerInstructions = readFileSync(instructionsPath, 'utf8')
-  const temporary = `${configPath}.0.3.4.1.tmp`
+  const temporary = `${configPath}.0.3.5.tmp`
   writeFileSync(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 })
   chmodSync(temporary, 0o600)
   renameSync(temporary, configPath)

@@ -40,7 +40,7 @@ function setup(t) {
     storage: { database: './state/federation.sqlite3' },
     codex: {
       binary: process.execPath,
-      expectedVersion: '0.164.0',
+      expectedVersion: '0.171.0',
       runtimeRoot: paths.runtime,
     },
     admin: { tokenFile: './admin.token' },
@@ -75,8 +75,8 @@ test('private file-based configuration loads without exposing tokens', (t) => {
   assert.equal(config.admin.token.startsWith('admin-token'), true)
   assert.equal(config.peers[0].inboundToken.startsWith('inbound-token'), true)
   assert.equal(config.storage.database, join(env.paths.root, 'state', 'federation.sqlite3'))
-  assert.equal(config.codex.expectedVersion, '0.164.0')
-  assert.deepEqual(config.codex.allowedModels, ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"])
+  assert.equal(config.codex.expectedVersion, '0.171.0')
+  assert.deepEqual(config.codex.allowedModels, ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra"])
   assert.equal(config.agents[0].sandboxMode, 'read-only')
   const publicView = JSON.stringify(publicConfig(config))
   assert.doesNotMatch(publicView, /admin-token|inbound-token|outbound-token/)

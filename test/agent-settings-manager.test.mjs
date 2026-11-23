@@ -35,7 +35,7 @@ function fixture(t) {
     storage: { database: './state.sqlite3' },
     codex: {
       binary: process.execPath,
-      expectedVersion: '0.164.0',
+      expectedVersion: '0.171.0',
       runtimeRoot: workspace,
       imageGenerationRequired: false,
     },

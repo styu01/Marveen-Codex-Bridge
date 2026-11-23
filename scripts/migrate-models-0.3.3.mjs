@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import { chmodSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { BRIDGE_ALLOWED_MODELS } from '../src/model-policy.mjs'
+// Frozen historical 0.3.3 catalog; do not change when later releases add models.
+const BRIDGE_ALLOWED_MODELS = Object.freeze([
+  'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-6-sol', 'gpt-6-luna',
+  'gpt-6.1-sol', 'gpt-6-astra',
+])
 
 if (process.argv.length !== 5) {
   throw new Error('usage: migrate-models-0.3.3.mjs ORIGINAL_CONFIG NEW_CODEX_BINARY OUTPUT_CONFIG')

@@ -7,7 +7,7 @@ BETTER_SQLITE3_PATH=""
 CLEAN_MARVEEN_ROOT=""
 CODEX_BIN="${HOME}/.local/bin/codex"
 CODEX_MODEL="gpt-5.6-terra"
-EXPECTED_CODEX_VERSION="0.164.0"
+EXPECTED_CODEX_VERSION="0.171.0"
 REAL_OUTPUT_ROOT=""
 MOCK_ONLY=0
 TEST_LOG=""
@@ -186,6 +186,11 @@ required_files=(
   test/service-e2e.test.mjs
   test/sqlite-driver-parity.test.mjs
   scripts/production-canary-0.3.4.1.mjs
+  scripts/production-canary-0.3.5.mjs
+  scripts/migrate-models-0.3.5.mjs
+  scripts/check-codex-models-0.3.5.mjs
+  scripts/verify-model-selection-0.3.5.mjs
+  test/model-upgrade-0.3.5.test.mjs
   scripts/migrate-models-0.3.3.mjs
   scripts/check-codex-models-0.3.3.mjs
   scripts/verify-model-selection-0.3.3.mjs
@@ -208,7 +213,7 @@ NODE_OPTIONS=--no-warnings "${NODE_BIN}" -e '
   const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json")))
   const lock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json")))
   const example = JSON.parse(fs.readFileSync(path.join(root, "config/config.example.json")))
-  if (pkg.version !== "0.3.4.1") throw new Error("wrong package version")
+  if (pkg.version !== "0.3.5") throw new Error("wrong package version")
   if (pkg.dependencies?.["better-sqlite3"] !== "11.10.0") {
     throw new Error("better-sqlite3 must be pinned")
   }
@@ -220,7 +225,7 @@ NODE_OPTIONS=--no-warnings "${NODE_BIN}" -e '
     || example.systemId !== "codex"
     || example.codex?.imageGenerationRequired !== true
     || example.codex?.imageModel !== "gpt-image-2"
-    || JSON.stringify(example.codex?.allowedModels) !== JSON.stringify(["gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"])
+    || JSON.stringify(example.codex?.allowedModels) !== JSON.stringify(["gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra"])
     || example.codex?.turnTimeoutMs !== 2_700_000
     || example.workers?.runtimeLeaseMs !== 2_700_000
   ) {
@@ -259,17 +264,17 @@ TEST_LOG="$(mktemp)"
     NODE_OPTIONS=--no-warnings \
     "${NODE_BIN}" --test --test-concurrency=1 test/*.test.mjs
 ) | tee "${TEST_LOG}"
-grep -Eq '^(#|ℹ) tests 157$' "${TEST_LOG}" \
-  || fail "expected exactly 151 tests"
-grep -Eq '^(#|ℹ) pass 157$' "${TEST_LOG}" \
-  || fail "expected exactly 151 passing tests"
+grep -Eq '^(#|ℹ) tests 168$' "${TEST_LOG}" \
+  || fail "expected exactly 168 tests"
+grep -Eq '^(#|ℹ) pass 168$' "${TEST_LOG}" \
+  || fail "expected exactly 168 passing tests"
 grep -Eq '^(#|ℹ) fail 0$' "${TEST_LOG}" \
   || fail "test failures were reported"
 grep -Eq '^(#|ℹ) skipped 0$' "${TEST_LOG}" \
   || fail "tests were skipped"
 grep -Eq '^(#|ℹ) cancelled 0$' "${TEST_LOG}" \
   || fail "tests were cancelled"
-pass "all 151 Phase 1-7 mock, security, settings, installer, cutover and rollback tests pass with no skip"
+pass "all 168 Phase 1-7 mock, security, settings, installer, cutover and rollback tests pass with no skip"
 
 if [[ "${MOCK_ONLY}" -eq 1 ]]; then
   echo "RESULT: PHASE 7 MOCK INSTALLER, CUTOVER, ROLLBACK AND FEDERATION PASS (REAL CODEX NOT RUN)"

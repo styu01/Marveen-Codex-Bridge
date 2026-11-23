@@ -9,8 +9,8 @@ import { BRIDGE_ALLOWED_MODELS, effortsForModel, isValidModelEffort } from '../s
 const expected = ['gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6-astra']
 
 test('six model IDs: GPT-5.6 originals preserved; GPT-6 family additive', () => {
-  assert.deepEqual(BRIDGE_ALLOWED_MODELS, expected)
-  assert.equal(new Set(BRIDGE_ALLOWED_MODELS).size, 6)
+  assert.deepEqual(BRIDGE_ALLOWED_MODELS.slice(0, 6), expected)
+  assert.equal(new Set(BRIDGE_ALLOWED_MODELS).size, 9)
   assert.ok(Object.isFrozen(BRIDGE_ALLOWED_MODELS))
 })
 

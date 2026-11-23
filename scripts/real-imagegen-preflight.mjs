@@ -35,7 +35,7 @@ mkdirSync(runtimeRoot, { recursive: true, mode: 0o700 })
 mkdirSync(workspacePath, { recursive: true, mode: 0o700 })
 
 const model = args.model ?? 'gpt-5.6-terra'
-const expectedVersion = args['expected-version'] ?? '0.164.0'
+const expectedVersion = args['expected-version'] ?? '0.171.0'
 const adminToken = 'phase52-real-admin-token-00000000000000000000000'
 const config = {
   version: 1,

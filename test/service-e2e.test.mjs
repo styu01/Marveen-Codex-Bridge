@@ -54,7 +54,7 @@ function config(root, peer) {
     storage: { database: join(root, 'state', 'federation.sqlite3') },
     codex: {
       binary: process.execPath,
-      expectedVersion: '0.164.0',
+      expectedVersion: '0.171.0',
       runtimeRoot: root,
       startupTimeoutMs: 60_000,
       requestTimeoutMs: 60_000,
@@ -333,7 +333,7 @@ test('standalone dashboard is static, hardened and admin API remains authenticat
     { token: ADMIN_TOKEN },
   )
   assert.equal(summary.status, 200)
-  assert.equal(summary.body.data.bridgeVersion, '0.3.4.1')
+  assert.equal(summary.body.data.bridgeVersion, '0.3.5')
   assert.equal(summary.body.data.readiness.ready, true)
   assert.equal(summary.body.data.agents[0].id, 'programozo')
   assert.equal(Object.hasOwn(summary.body.data.counts, 'artifacts'), false)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-EXPECTED_VERSION="0.3.4.1"
+EXPECTED_VERSION="0.3.5"
 OFFLINE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in

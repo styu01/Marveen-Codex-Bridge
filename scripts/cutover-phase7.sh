@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.3.4.1"
+VERSION="0.3.5"
 LEGACY_MARVEEN_VERSION="1.21.1"
 EXPECTED_MARVEEN_VERSION="1.25.1"
 SOURCE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -109,8 +109,8 @@ CODEX_REAL="$(readlink -f -- "${CODEX_BIN}")"
 [[ -x "${NODE_REAL}" && "$("${NODE_REAL}" --version)" == v22.* ]] \
   || fail "fixed Node 22 is required"
 [[ -x "${CODEX_REAL}" ]] || fail "Codex binary is not executable"
-"${CODEX_REAL}" --version | grep -q '0\.145\.0' \
-  || fail "Codex CLI 0.164.0 is required"
+"${CODEX_REAL}" --version | grep -q '0\.171\.0' \
+  || fail "Codex CLI 0.171.0 is required"
 "${CODEX_REAL}" login status 2>&1 | grep -q '^Logged in using' \
   || fail "Codex ChatGPT login is required"
 [[ "${MAIN_AGENT_ID}" =~ ^[a-zA-Z0-9_-]{1,64}$ ]] \

@@ -31,7 +31,7 @@ test('Phase 7 prepare-only installer creates an isolated candidate and never tou
 
   const fakeCodex = join(bin, 'codex')
   writeFileSync(fakeCodex, `#!/usr/bin/env bash
-if [[ "\${1:-}" == "--version" ]]; then echo "codex-cli 0.164.0"; exit 0; fi
+if [[ "\${1:-}" == "--version" ]]; then echo "codex-cli 0.171.0"; exit 0; fi
 if [[ "\${1:-}" == "login" && "\${2:-}" == "status" ]]; then
   echo "Logged in using ChatGPT"; exit 0
 fi
@@ -78,19 +78,19 @@ exec /usr/bin/id "$@"
   const data = join(home, '.local/share/marveen-codex-bridge')
   const candidate = join(data, 'candidate')
   assert.equal(lstatSync(candidate).isSymbolicLink(), true)
-  assert.match(readlinkSync(candidate), /0\.3\.4\.1$/)
+  assert.match(readlinkSync(candidate), /0\.3\.5$/)
   assert.equal(existsSync(join(data, 'current')), false)
   assert.equal(
     JSON.parse(readFileSync(join(
       data,
-      'releases/0.3.4.1/package.json',
+      'releases/0.3.5/package.json',
     ))).version,
-    '0.3.4.1',
+    '0.3.5',
   )
   const configRoot = join(home, '.config/marveen-codex-bridge')
   assert.equal(lstatSync(join(configRoot, 'config.json')).mode & 0o777, 0o600)
   const installedConfig = JSON.parse(readFileSync(join(configRoot, 'config.json'), 'utf8'))
-  assert.deepEqual(installedConfig.codex.allowedModels, ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"])
+  assert.deepEqual(installedConfig.codex.allowedModels, ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra"])
   assert.equal(installedConfig.agents[0].reasoningEffort, 'high')
   assert.match(installedConfig.agents[0].developerInstructions, /Codex programozó/)
   assert.match(installedConfig.agents[0].developerInstructions, /marveen_agent_message_send/)
@@ -110,15 +110,15 @@ exec /usr/bin/id "$@"
   assert.doesNotMatch(unit, /bela-codex-bridge/)
   assert.match(
     unit,
-    /releases\/0\.3\.4\.1\/src\/main\.mjs/,
+    /releases\/0\.3\.5\/src\/main\.mjs/,
   )
   assert.match(
     unit,
-    /MARVEEN_CODEX_BRIDGE_RUNTIME_MODULE=.*releases\/0\.3\.4\.1\/src\/codex-runtime-module\.mjs/,
+    /MARVEEN_CODEX_BRIDGE_RUNTIME_MODULE=.*releases\/0\.3\.5\/src\/codex-runtime-module\.mjs/,
   )
   assert.match(
     unit,
-    /MARVEEN_CODEX_BRIDGE_BETTER_SQLITE3_PATH=.*releases\/0\.3\.4\.1\/node_modules\/better-sqlite3/,
+    /MARVEEN_CODEX_BRIDGE_BETTER_SQLITE3_PATH=.*releases\/0\.3\.5\/node_modules\/better-sqlite3/,
   )
   assert.match(unit, /Environment=CODEX_HOME=.*\/\.codex/)
   assert.match(unit, /ReadWritePaths=.*\/\.config\/marveen-codex-bridge/)
@@ -151,7 +151,7 @@ exec /usr/bin/id "$@"
   })
   chmodSync(legacyConfigPath, 0o600)
 
-  const installedRelease = join(data, 'releases/0.3.4.1')
+  const installedRelease = join(data, 'releases/0.3.5')
   const staleMarker = join(installedRelease, 'STALE-CANDIDATE')
   writeFileSync(staleMarker, 'must be replaced\n')
   const replacement = spawnSync('bash', [
@@ -186,7 +186,7 @@ exec /usr/bin/id "$@"
   )
   assert.ok(
     readdirSync(join(data, 'releases'))
-      .some((name) => name.startsWith('.0.3.4.1.superseded.')),
+      .some((name) => name.startsWith('.0.3.5.superseded.')),
   )
   const replacementUnit = readFileSync(unitPath, 'utf8')
   assert.match(
@@ -220,7 +220,7 @@ require('node:fs').writeFileSync(process.env.PHASE6_PATH_CAPTURE, process.env.PA
 
   const fakeCodex = join(commandBin, 'codex')
   writeFileSync(fakeCodex, `#!/usr/bin/env bash
-if [[ "\${1:-}" == "--version" ]]; then echo "codex-cli 0.164.0"; exit 0; fi
+if [[ "\${1:-}" == "--version" ]]; then echo "codex-cli 0.171.0"; exit 0; fi
 if [[ "\${1:-}" == "login" && "\${2:-}" == "status" ]]; then
   echo "Logged in using ChatGPT"; exit 0
 fi
@@ -271,7 +271,7 @@ test('Phase 7 installer rejects a symbolic-link CODEX_HOME', (t) => {
 
   const fakeCodex = join(bin, 'codex')
   writeFileSync(fakeCodex, `#!/usr/bin/env bash
-if [[ "\${1:-}" == "--version" ]]; then echo "codex-cli 0.164.0"; exit 0; fi
+if [[ "\${1:-}" == "--version" ]]; then echo "codex-cli 0.171.0"; exit 0; fi
 if [[ "\${1:-}" == "login" && "\${2:-}" == "status" ]]; then
   echo "Logged in using ChatGPT"; exit 0
 fi

@@ -47,7 +47,7 @@ function config(root, peer, approvalPolicy = 'manual') {
     storage: { database: join(root, 'state', 'federation.sqlite3') },
     codex: {
       binary: resolve('test/fixtures/fake-codex-app-server.mjs'),
-      expectedVersion: '0.164.0',
+      expectedVersion: '0.171.0',
       runtimeRoot: join(root, 'runtime'),
       startupTimeoutMs: 5_000,
       requestTimeoutMs: 5_000,

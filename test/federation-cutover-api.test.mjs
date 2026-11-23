@@ -316,9 +316,9 @@ test('cutover script keeps rollback and independence invariants', () => {
     source,
     /\b(?:sed|perl|python3?)\b[^\n]*src\/web\/|web\/app\.js.*replace/,
   )
-  assert.match(verifier, /tests 157\$/)
-  assert.match(verifier, /pass 157\$/)
-  assert.match(verifier, /all 151 Phase 1-7/)
+  assert.match(verifier, /tests 168\$/)
+  assert.match(verifier, /pass 168\$/)
+  assert.match(verifier, /all 168 Phase 1-7/)
   assert.doesNotMatch(verifier, /expected exactly 105/)
   for (const historical of historicalVerifiers) {
     assert.match(historical, /DEPRECATED:/)

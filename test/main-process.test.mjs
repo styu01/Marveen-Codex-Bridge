@@ -64,7 +64,7 @@ test('real entrypoint starts with production driver and stops cleanly', async (t
     storage: { database: './state/federation.sqlite3' },
     codex: {
       binary: process.execPath,
-      expectedVersion: '0.164.0',
+      expectedVersion: '0.171.0',
       runtimeRoot: join(root, 'runtime'),
     },
     admin: { tokenFile: './admin.token' },
@@ -106,7 +106,7 @@ test('real entrypoint starts with production driver and stops cleanly', async (t
     stderr += chunk.toString('utf8')
   })
   const started = await waitForJsonLine(child, 'service_started')
-  assert.equal(started.bridgeVersion, '0.3.4.1')
+  assert.equal(started.bridgeVersion, '0.3.5')
   const ready = await fetch(`http://127.0.0.1:${started.port}/readyz`)
   assert.equal(ready.status, 200)
   assert.equal((await ready.json()).status, 'ready')
